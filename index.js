@@ -1,3 +1,14 @@
+const express = require('express');
+const axios = require('axios');
+const bodyParser = require('body-parser');
+
+const app = express();  // Inicializa la app de Express
+const port = process.env.PORT || 8080;
+
+app.use(bodyParser.json());
+
+// Definir las rutas y la lógica del bot aquí...
+
 app.post('/', async (req, res) => {
   const { message } = req.body;
   console.log("📨 Mensaje recibido:", message);
@@ -6,34 +17,28 @@ app.post('/', async (req, res) => {
     return res.status(400).send('Mensaje no recibido');
   }
 
-  // Extraer los valores del mensaje JSON
-  const symbol = message.symbol;    // Ejemplo: "BTCUSDT"
-  const price = message.price;      // Ejemplo: 84746.17
-  const timeframe = message.timeframe; // Ejemplo: "1m"
-  const side = message.side.toUpperCase(); // Ejemplo: "BUY" o "SELL"
-  
-  // Verificar que se recibió una señal de compra o venta
-  if (side !== 'BUY' && side !== 'SELL') {
-    return res.status(400).send('Señal no válida, debe ser BUY o SELL');
+  await sendTelegramMessage(message);
+
+  const match = message.match(/(BUY|SELL).*?([A-Z]+USDT).*?a\s([\d.]+)/i);
+  if (!match) {
+    console.log("❌ No se pudo extraer símbolo o precio del mensaje.");
+    return res.status(200).send("Mensaje recibido sin datos válidos.");
   }
 
+  const [, side, symbol, priceStr] = match;
   const quantityUSD = 1000;
-  const quantity = (quantityUSD / parseFloat(price)).toFixed(6); // Calcular cantidad de contrato
+  const price = parseFloat(priceStr);
+  const quantity = (quantityUSD / price).toFixed(3);
 
-  // Crear el mensaje para Telegram con el nuevo formato
-  const telegramMessage = `📡 Señal recibida de TradingView:\n\n` +
-    `${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price}\n\n` +
-    `📈 Ejecutando orden:\n` +
-    `- Tipo: ${side === 'BUY' ? 'Buy' : 'Sell'}\n` +
-    `- Símbolo: ${symbol}\n` +
-    `- Precio: $${price}\n` +
-    `- Cantidad: ${quantity} (${quantityUSD} USDT)`;
-
-  // Enviar el mensaje a Telegram
-  await sendTelegramMessage(telegramMessage);
-
-  // Enviar la orden a Bybit
-  await sendBybitOrder(symbol, side, quantity);
-
+  await sendBybitOrder(symbol, side.toUpperCase(), quantity);
   res.send("Mensaje procesado");
+});
+
+// Healthcheck
+app.get('/', (req, res) => {
+  res.send("👋 El bot está activo");
+});
+
+app.listen(port, () => {
+  console.log(`🚀 Servidor escuchando en el puerto ${port}`);
 });
