@@ -65,7 +65,7 @@ const sendBinanceOrder = async (symbol, side, quantity) => {
       .update(params)
       .digest('hex');
 
-    const url = `https://api.binance.com/api/v3/order?${params}&signature=${signature}`;
+    const url = `https://testnet.binance.vision/api/v3/order?${params}&signature=${signature}`;
 
     const headers = {
       'X-MBX-APIKEY': process.env.BINANCE_API_KEY,
