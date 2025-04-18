@@ -1,85 +1,82 @@
 const express = require('express');
-const axios = require('axios');
 const bodyParser = require('body-parser');
+const axios = require('axios');
+const crypto = require('crypto');
+require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
-// Variables de entorno
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const BYBIT_API_KEY = process.env.BYBIT_API_KEY;
-const BYBIT_API_SECRET = process.env.BYBIT_API_SECRET;
-
-// Función para enviar mensaje a Telegram
-const sendTelegramMessage = async (message) => {
+app.post('/', async (req, res) => {
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    await axios.post(url, {
-      chat_id: TELEGRAM_CHAT_ID,
-      text: message,
-    });
-    console.log('✅ Mensaje enviado a Telegram');
+    const data = req.body;
+
+    // Extraer datos
+    const message = data.message;
+    const [_, rawSide, rawPair, rawPrice] = message.match(/(BUY|SELL) - (\w+) a ([\d.]+)/);
+    const side = rawSide.toUpperCase();
+    const symbol = rawPair.toUpperCase();
+    const price = parseFloat(rawPrice);
+    const quantity = 1000 / price; // Aproximado
+
+    // Construir mensaje para Telegram
+    const telegramMessage = `
+📡 Señal recibida de TradingView:
+
+${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price} en 1
+
+📈 Ejecutando orden:
+- Tipo: ${side}
+- Símbolo: ${symbol}
+- Precio: $${price}
+- Cantidad: ${quantity.toFixed(6)} (1000 USDT)
+`;
+
+    // Enviar a Telegram
+    await sendTelegramMessage(telegramMessage);
+    console.log("✅ Mensaje enviado a Telegram");
+
+    // Enviar orden a Binance
+    await sendBinanceOrder(symbol, side, quantity.toFixed(6));
+
+    res.status(200).send('✅ Señal procesada');
   } catch (error) {
-    console.error('❌ Error enviando mensaje a Telegram:', error.message);
+    console.error("❌ Error procesando la señal:", error.message);
+    res.status(500).send('❌ Error interno del servidor');
   }
+});
+
+const sendTelegramMessage = async (message) => {
+  const telegramUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+  await axios.post(telegramUrl, {
+    chat_id: process.env.TELEGRAM_CHAT_ID,
+    text: message,
+  });
 };
 
-// Función para enviar orden ficticia a Bybit (requiere firma real si es producción)
-const sendBybitOrder = async (symbol, side, quantity) => {
+const sendBinanceOrder = async (symbol, side, quantity) => {
   try {
-    const url = `https://api-testnet.bybit.com/v2/private/order/create`;
+    const timestamp = Date.now();
+    const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+    const signature = crypto
+      .createHmac('sha256', process.env.BINANCE_API_SECRET)
+      .update(params)
+      .digest('hex');
 
-    const payload = {
-      api_key: BYBIT_API_KEY,
-      symbol,
-      side,
-      order_type: "Market",
-      qty: quantity,
-      time_in_force: "GoodTillCancel",
-      timestamp: Date.now(),
+    const url = `https://api.binance.com/api/v3/order?${params}&signature=${signature}`;
+
+    const headers = {
+      'X-MBX-APIKEY': process.env.BINANCE_API_KEY,
     };
 
-    // Aquí normalmente deberías firmar con SHA256 + secret
-    const response = await axios.post(url, payload);
-    console.log("✅ Orden enviada a Bybit:", response.data);
+    const response = await axios.post(url, null, { headers });
+    console.log("✅ Orden enviada a Binance:", response.data);
   } catch (error) {
-    console.error("❌ Error enviando orden a Bybit:", error.message);
+    console.error("❌ Error enviando orden a Binance:", error.response?.data || error.message);
   }
 };
-
-// Ruta principal para recibir señales
-app.post('/', async (req, res) => {
-  const { message } = req.body;
-  console.log("📨 Mensaje recibido:", message);
-
-  if (!message) {
-    return res.status(400).send('Mensaje no recibido');
-  }
-
-  await sendTelegramMessage(message); // Enviar mensaje a Telegram
-
-  const match = message.match(/(BUY|SELL).*?([A-Z]+USDT).*?a\s([\d.]+)/i);
-  if (!match) {
-    console.log("❌ No se pudo extraer símbolo o precio del mensaje.");
-    return res.status(200).send("Mensaje recibido sin datos válidos.");
-  }
-
-  const [, side, symbol, priceStr] = match;
-  const quantityUSD = 1000;
-  const price = parseFloat(priceStr);
-  const quantity = (quantityUSD / price).toFixed(3);
-
-  await sendBybitOrder(symbol, side.toUpperCase(), quantity);
-  res.send("Mensaje procesado");
-});
-
-// Healthcheck
-app.get('/', (req, res) => {
-  res.send("👋 El bot está activo");
-});
 
 app.listen(port, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${port}`);
