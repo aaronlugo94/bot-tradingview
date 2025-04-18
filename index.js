@@ -13,33 +13,33 @@ app.post('/', async (req, res) => {
   try {
     const data = req.body;
 
-    // Extraer datos
+    // Extraer datos del mensaje
     const message = data.message;
     const [_, rawSide, rawPair, rawPrice] = message.match(/(BUY|SELL) - (\w+) a ([\d.]+)/);
     const side = rawSide.toUpperCase();
     const symbol = rawPair.toUpperCase();
     const price = parseFloat(rawPrice);
-    const quantity = 1000 / price; // Aproximado
+    const quantity = (1000 / price).toFixed(3); // Aproximado
 
     // Construir mensaje para Telegram
     const telegramMessage = `
 📡 Señal recibida de TradingView:
 
-${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price} en 1
+${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price}
 
 📈 Ejecutando orden:
 - Tipo: ${side}
 - Símbolo: ${symbol}
 - Precio: $${price}
-- Cantidad: ${quantity.toFixed(6)} (1000 USDT)
+- Cantidad: ${quantity} (1000 USDT)
 `;
 
     // Enviar a Telegram
     await sendTelegramMessage(telegramMessage);
     console.log("✅ Mensaje enviado a Telegram");
 
-    // Enviar orden a Binance
-    await sendBinanceOrder(symbol, side, quantity.toFixed(6));
+    // Enviar orden a Bybit Testnet
+    await sendBybitOrder(symbol, side, quantity);
 
     res.status(200).send('✅ Señal procesada');
   } catch (error) {
@@ -56,35 +56,43 @@ const sendTelegramMessage = async (message) => {
   });
 };
 
-const sendBinanceOrder = async (symbol, side, quantity) => {
+const sendBybitOrder = async (symbol, side, quantity) => {
   try {
+    const endpoint = 'https://api-testnet.bybit.com/v2/private/order/create';
     const timestamp = Date.now();
-    const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
-    const signature = crypto
-      .createHmac('sha256', process.env.BINANCE_API_SECRET)
-      .update(params)
-      .digest('hex');
 
-    const url = `https://testnet.binance.vision/api/v3/order?${params}&signature=${signature}`;
-
-    const headers = {
-      'X-MBX-APIKEY': process.env.BINANCE_API_KEY,
+    const params = {
+      api_key: process.env.BYBIT_API_KEY,
+      symbol: symbol,
+      side: side,
+      order_type: 'Market',
+      qty: quantity,
+      time_in_force: 'GoodTillCancel',
+      timestamp: timestamp,
     };
 
-    const response = await axios.post(url, null, { headers });
-    console.log("✅ Orden enviada a Binance:", response.data);
+    // Ordenar alfabéticamente los parámetros
+    const orderedParams = Object.keys(params).sort().reduce((obj, key) => {
+      obj[key] = params[key];
+      return obj;
+    }, {});
+
+    const paramString = Object.entries(orderedParams).map(([key, val]) => `${key}=${val}`).join('&');
+
+    const signature = crypto
+      .createHmac('sha256', process.env.BYBIT_API_SECRET)
+      .update(paramString)
+      .digest('hex');
+
+    const finalUrl = `${endpoint}?${paramString}&sign=${signature}`;
+
+    const response = await axios.post(finalUrl);
+    console.log("✅ Orden enviada a Bybit Testnet:", response.data);
   } catch (error) {
-    console.error("❌ Error enviando orden a Binance:", error.response?.data || error.message);
+    console.error("❌ Error enviando orden a Bybit Testnet:", error.response?.data || error.message);
   }
 };
 
-// 👉 Ruta para detectar IP
-app.get('/my-ip', async (req, res) => {
-  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-  res.send(`IP detectada: ${ip}`);
-});
-
-// 👂 Iniciar servidor
 app.listen(port, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${port}`);
 });
