@@ -1,7 +1,7 @@
-const express = require("express");
-const axios = require("axios");
-const bodyParser = require("body-parser");
-const crypto = require("crypto");
+const express = require('express');
+const axios = require('axios');
+const bodyParser = require('body-parser');
+const crypto = require('crypto');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -22,66 +22,68 @@ const sendTelegramMessage = async (message) => {
       chat_id: TELEGRAM_CHAT_ID,
       text: message,
     });
-    console.log("✅ Mensaje enviado a Telegram");
+    console.log('✅ Mensaje enviado a Telegram');
   } catch (error) {
-    console.error("❌ Error enviando mensaje a Telegram:", error.message);
+    console.error('❌ Error enviando mensaje a Telegram:', error.message);
   }
 };
 
-// Función para firmar y enviar orden a Bybit (TESTNET)
+// Función para firmar los parámetros de la orden
+const signRequest = (params, secret) => {
+  const orderedParams = Object.keys(params)
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join('&');
+
+  const signature = crypto
+    .createHmac('sha256', secret)
+    .update(orderedParams)
+    .digest('hex');
+
+  return signature;
+};
+
+// Enviar orden firmada a Bybit
 const sendBybitOrder = async (symbol, side, quantity) => {
   try {
-    const url = `https://api-testnet.bybit.com/v2/private/order/create`;
-    const timestamp = Date.now();
+    const url = 'https://api-testnet.bybit.com/v2/private/order/create';
 
     const params = {
       api_key: BYBIT_API_KEY,
       symbol,
       side,
-      order_type: "Market",
+      order_type: 'Market',
       qty: quantity,
-      time_in_force: "GoodTillCancel",
-      timestamp,
+      time_in_force: 'GoodTillCancel',
+      timestamp: Date.now(),
     };
 
-    // Crear firma
-    const paramStr = Object.keys(params)
-      .sort()
-      .map((key) => `${key}=${params[key]}`)
-      .join("&");
-
-    const sign = crypto
-      .createHmac("sha256", BYBIT_API_SECRET)
-      .update(paramStr)
-      .digest("hex");
-
-    const finalParams = { ...params, sign };
+    params.sign = signRequest(params, BYBIT_API_SECRET);
 
     const response = await axios.post(url, null, {
-      params: finalParams,
+      params,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
 
-    console.log("✅ Orden enviada a Bybit:", response.data);
+    console.log('✅ Orden enviada a Bybit:', response.data);
   } catch (error) {
-    console.error("❌ Error enviando orden a Bybit:", error.message);
+    console.error('❌ Error enviando orden a Bybit:', error.response?.data || error.message);
   }
 };
 
-// Ruta principal para recibir señales
-app.post("/", async (req, res) => {
+// Ruta principal
+app.post('/', async (req, res) => {
   const { message } = req.body;
-  console.log("📨 Mensaje recibido:", message);
+  console.log('📨 Mensaje recibido:', message);
 
-  if (!message) {
-    return res.status(400).send("Mensaje no recibido");
-  }
+  if (!message) return res.status(400).send('Mensaje no recibido');
 
   await sendTelegramMessage(message);
 
   const match = message.match(/(BUY|SELL).*?([A-Z]+USDT).*?a\s([\d.]+)/i);
   if (!match) {
-    console.log("❌ No se pudo extraer símbolo o precio del mensaje.");
-    return res.status(200).send("Mensaje recibido sin datos válidos.");
+    console.log('❌ No se pudo extraer símbolo o precio del mensaje.');
+    return res.status(200).send('Mensaje recibido sin datos válidos.');
   }
 
   const [, side, symbol, priceStr] = match;
@@ -90,12 +92,12 @@ app.post("/", async (req, res) => {
   const quantity = (quantityUSD / price).toFixed(3);
 
   await sendBybitOrder(symbol, side.toUpperCase(), quantity);
-  res.send("✅ Mensaje procesado");
+  res.send('Mensaje procesado');
 });
 
 // Healthcheck
-app.get("/", (req, res) => {
-  res.send("👋 El bot está activo");
+app.get('/', (req, res) => {
+  res.send('👋 El bot está activo');
 });
 
 app.listen(port, () => {
