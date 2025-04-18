@@ -78,13 +78,13 @@ const sendBinanceOrder = async (symbol, side, quantity) => {
   }
 };
 
-
-
-app.listen(port, () => {
-  console.log(`🚀 Servidor escuchando en el puerto ${port}`);
-
-  app.get('/my-ip', async (req, res) => {
+// 👉 Ruta para detectar IP
+app.get('/my-ip', async (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
   res.send(`IP detectada: ${ip}`);
+});
 
+// 👂 Iniciar servidor
+app.listen(port, () => {
+  console.log(`🚀 Servidor escuchando en el puerto ${port}`);
 });
