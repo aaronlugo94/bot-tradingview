@@ -19,22 +19,21 @@ app.post('/', async (req, res) => {
     const side = rawSide.toUpperCase();
     const symbol = rawPair.toUpperCase();
     const price = parseFloat(rawPrice);
-    const quantity = (1000 / price).toFixed(3); // Aproximado
+    const quantity = (1000 / price).toFixed(6); // Aproximado
 
-    // Construir mensaje para Telegram
+    // Enviar mensaje a Telegram
     const telegramMessage = `
 📡 Señal recibida de TradingView:
 
-${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price}
+${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price} en 1
 
 📈 Ejecutando orden:
 - Tipo: ${side}
 - Símbolo: ${symbol}
 - Precio: $${price}
 - Cantidad: ${quantity} (1000 USDT)
-`;
+    `;
 
-    // Enviar a Telegram
     await sendTelegramMessage(telegramMessage);
     console.log("✅ Mensaje enviado a Telegram");
 
@@ -58,36 +57,42 @@ const sendTelegramMessage = async (message) => {
 
 const sendBybitOrder = async (symbol, side, quantity) => {
   try {
-    const endpoint = 'https://api-testnet.bybit.com/v2/private/order/create';
+    const apiKey = process.env.BYBIT_API_KEY;
+    const secret = process.env.BYBIT_API_SECRET;
+    const recvWindow = 5000;
     const timestamp = Date.now();
 
     const params = {
-      api_key: process.env.BYBIT_API_KEY,
-      symbol: symbol,
-      side: side,
-      order_type: 'Market',
+      apiKey,
+      symbol,
+      side,
+      type: "MARKET",
       qty: quantity,
-      time_in_force: 'GoodTillCancel',
-      timestamp: timestamp,
+      timeInForce: "GTC",
+      timestamp,
+      recvWindow,
     };
 
-    // Ordenar alfabéticamente los parámetros
-    const orderedParams = Object.keys(params).sort().reduce((obj, key) => {
-      obj[key] = params[key];
-      return obj;
-    }, {});
+    // Crear string de firma
+    const orderedParams = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('&');
 
-    const paramString = Object.entries(orderedParams).map(([key, val]) => `${key}=${val}`).join('&');
+    // Generar firma
+    const signature = crypto.createHmac('sha256', secret).update(orderedParams).digest('hex');
 
-    const signature = crypto
-      .createHmac('sha256', process.env.BYBIT_API_SECRET)
-      .update(paramString)
-      .digest('hex');
+    // Agregar firma
+    const finalParams = `${orderedParams}&sign=${signature}`;
 
-    const finalUrl = `${endpoint}?${paramString}&sign=${signature}`;
+    const response = await axios.post(
+      `https://api-testnet.bybit.com/spot/v1/order?${finalParams}`,
+      {}, // cuerpo vacío
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        }
+      }
+    );
 
-    const response = await axios.post(finalUrl);
-    console.log("✅ Orden enviada a Bybit Testnet:", response.data);
+    console.log("✅ Orden enviada a Bybit:", response.data);
   } catch (error) {
     console.error("❌ Error enviando orden a Bybit Testnet:", error.response?.data || error.message);
   }
