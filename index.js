@@ -1,3 +1,5 @@
+// 📈 BOT v2 Mejorado - TradingView + Binance + Telegram
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
@@ -9,127 +11,140 @@ const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
-// Función para obtener la IP pública
-const getPublicIP = async () => {
-  try {
-    const response = await axios.get('https://api.ipify.org?format=json');
-    const ip = response.data.ip;
-    console.log(`🌐 IP Pública del servidor: ${ip}`);
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-    // También enviar IP a Telegram
-    await sendTelegramMessage(`🚀 Bot iniciado correctamente.\n🌐 IP pública del servidor: ${ip}`);
-  } catch (error) {
-    console.error('❌ No se pudo obtener la IP pública:', error.message);
-  }
-};
+// 👉 Helper para firmar solicitudes a Binance
+function sign(queryString) {
+  return crypto.createHmac('sha256', BINANCE_API_SECRET)
+    .update(queryString)
+    .digest('hex');
+}
 
+// 👉 Función para enviar mensajes a Telegram
+async function sendTelegram(message) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  await axios.post(url, {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: message,
+  });
+}
+
+// 👉 Función para consultar posición abierta en Binance Futures
+async function getPosition(symbol) {
+  const timestamp = Date.now();
+  const params = `timestamp=${timestamp}`;
+  const signature = sign(params);
+
+  const url = `https://fapi.binance.com/fapi/v2/positionRisk?${params}&signature=${signature}`;
+  const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+  const response = await axios.get(url, { headers });
+  const positions = response.data;
+
+  return positions.find(pos => pos.symbol === symbol) || null;
+}
+
+// 👉 Función para cambiar leverage a 3x automáticamente
+async function setLeverage(symbol, leverage = 3) {
+  const timestamp = Date.now();
+  const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
+  const signature = sign(params);
+
+  const url = `https://fapi.binance.com/fapi/v1/leverage?${params}&signature=${signature}`;
+  const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+  await axios.post(url, {}, { headers });
+}
+
+// 👉 Función para mandar orden a Binance Futures
+async function sendOrder(symbol, side, quantity) {
+  const timestamp = Date.now();
+  const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+  const signature = sign(params);
+
+  const url = `https://fapi.binance.com/fapi/v1/order?${params}&signature=${signature}`;
+  const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+  const response = await axios.post(url, {}, { headers });
+  return response.data;
+}
+
+// 👉 Función para cerrar posición contraria
+async function closeOpposite(symbol, currentPositionAmt) {
+  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY'; // Si tienes long -> SELL para cerrar. Si short -> BUY.
+  const quantity = Math.abs(currentPositionAmt);
+
+  await sendOrder(symbol, side, quantity);
+
+  await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
+}
+
+// 🚀 Punto principal de entrada
 app.post('/', async (req, res) => {
   try {
-    const data = req.body;
+    const { message } = req.body;
+    console.log("Mensaje recibido:", message);
 
-    const message = data.message;
-    console.log("📨 Mensaje recibido de TradingView:", message);
+    let side, symbol, price;
 
-    let side = '';
-    let symbol = '';
-    let price = '';
-
-    if (message.includes("SELL")) {
-      side = 'SELL';
-      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
-    } else if (message.includes("BUY")) {
+    if (message.includes('BUY')) {
       side = 'BUY';
       [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+\.\d+)/);
+    } else if (message.includes('SELL')) {
+      side = 'SELL';
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
+    } else {
+      throw new Error('Mensaje no reconocido.');
     }
 
-    if (!side || !symbol || !price) {
-      throw new Error("❌ No se pudo procesar correctamente la señal");
+    // Preparar datos
+    symbol = symbol.replace('PERP', ''); // por si TradingView manda BTCUSDT.PERP
+    price = parseFloat(price);
+    const orderUSDT = 100;
+    const quantity = (orderUSDT / price).toFixed(6);
+
+    // 1. Consultar si hay posición abierta
+    const position = await getPosition(symbol);
+
+    if (position && parseFloat(position.positionAmt) !== 0) {
+      // 2. Cerrar posición previa si es necesario
+      const posSide = parseFloat(position.positionAmt);
+      if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
+        console.log('Cerrando posición existente...');
+        await closeOpposite(symbol, posSide);
+      }
     }
 
-    // Ajuste de símbolo para futuros USDT-M
-    if (!symbol.endsWith("USDT")) {
-      symbol = symbol + "USDT";
-    }
+    // 3. Ajustar leverage a 3x
+    await setLeverage(symbol, 3);
 
-    // Calcular la cantidad basada en 100 USDT y apalancamiento 3x
-    const usdtAmount = 100; // Monto a usar
-    const leverage = 3; // Apalancamiento deseado
-    const totalPositionSize = usdtAmount * leverage; // 300 USDT posición total
-    const quantity = (totalPositionSize / parseFloat(price)).toFixed(3); // Redondear a 3 decimales
+    // 4. Mandar nueva orden
+    const orderResult = await sendOrder(symbol, side, quantity);
 
-    // Enviar mensaje a Telegram
-    const telegramMessage = `
-📡 Señal recibida de TradingView:
+    console.log("✅ Nueva orden enviada:", orderResult);
 
-${side === 'SELL' ? '🔴' : '🟢'} ${side} - ${symbol} a ${price} en 1
+    // 5. Avisar a Telegram
+    await sendTelegram(`
+🚀 Nueva operación ejecutada:
 
-📈 Ejecutando orden:
 - Tipo: ${side}
 - Símbolo: ${symbol}
-- Precio: $${price}
-- Cantidad: ${quantity} (100 USDT con 3x leverage)
-    `;
+- Precio Aproximado: $${price}
+- Cantidad: ${quantity}
+- Order ID: ${orderResult.orderId}
+    `);
 
-    await sendTelegramMessage(telegramMessage);
-    console.log("✅ Mensaje enviado a Telegram");
-
-    // Ejecutar orden en Binance
-    await sendBinanceOrder(symbol, side, quantity);
-
-    res.status(200).send('✅ Señal procesada correctamente');
+    res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
-    console.error("❌ Error procesando la señal:", error.message);
-    res.status(500).send('❌ Error interno del servidor');
+    console.error("❌ Error:", error.message);
+    await sendTelegram(`❌ Error procesando señal: ${error.message}`);
+    res.status(500).send('❌ Error interno.');
   }
 });
 
-const sendTelegramMessage = async (message) => {
-  const telegramUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-  await axios.post(telegramUrl, {
-    chat_id: process.env.TELEGRAM_CHAT_ID,
-    text: message,
-  });
-};
-
-// Función para enviar orden a Binance Futures
-const sendBinanceOrder = async (symbol, side, quantity) => {
-  try {
-    const apiKey = process.env.BINANCE_API_KEY;
-    const secret = process.env.BINANCE_API_SECRET;
-    const timestamp = Date.now();
-    const recvWindow = 5000;
-
-    const params = {
-      symbol: symbol,
-      side: side,
-      type: "MARKET",
-      quantity: quantity,
-      timestamp: timestamp,
-      recvWindow: recvWindow,
-    };
-
-    const query = Object.keys(params).map(k => `${k}=${params[k]}`).join('&');
-    const signature = crypto.createHmac('sha256', secret).update(query).digest('hex');
-
-    const response = await axios.post(
-      `https://fapi.binance.com/fapi/v1/order?${query}&signature=${signature}`,
-      {},
-      {
-        headers: {
-          'X-MBX-APIKEY': apiKey,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      }
-    );
-
-    console.log("✅ Orden enviada a Binance Futures:", response.data);
-  } catch (error) {
-    console.error("❌ Error enviando orden a Binance:", error.response?.data || error.message);
-  }
-};
-
-// Arrancar el servidor y enviar IP a Telegram
-app.listen(port, async () => {
-  console.log(`🚀 Servidor escuchando en el puerto ${port}`);
-  await getPublicIP();
+app.listen(port, () => {
+  console.log(`🚀 Bot escuchando en puerto ${port}`);
 });
