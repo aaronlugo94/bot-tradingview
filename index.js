@@ -74,11 +74,20 @@ async function sendOrder(symbol, side, quantity) {
   const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
   const signature = sign(params);
 
+  console.log("Enviando parámetros a Binance:", { symbol, side, quantity, timestamp });
+  console.log("Firma generada:", signature);
+
   const url = `https://fapi.binance.com/fapi/v1/order?${params}&signature=${signature}`;
   const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
 
-  const response = await axios.post(url, {}, { headers });
-  return response.data;
+  try {
+    const response = await axios.post(url, {}, { headers });
+    console.log("Respuesta de Binance:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("Error en la solicitud a Binance:", error.response?.data || error.message);
+    throw new Error('Error en la solicitud a Binance');
+  }
 }
 
 // 👉 Función para cerrar posición contraria
@@ -110,10 +119,10 @@ app.post('/', async (req, res) => {
     }
 
     // Preparar datos
-    symbol = symbol.replace('PERP', ''); // por si TradingView manda BTCUSDT.PERP
+    symbol = symbol.replace('PERP', '').trim(); // por si TradingView manda BTCUSDT.PERP
     price = parseFloat(price);
     const orderUSDT = 100;
-    const quantity = (orderUSDT / price).toFixed(6);
+    const quantity = (orderUSDT / price).toFixed(3); // Redondear a 3 decimales
 
     // Obtener la IP pública del servidor
     const publicIP = await getPublicIP();
