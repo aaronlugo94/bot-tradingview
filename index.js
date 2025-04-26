@@ -9,40 +9,49 @@ const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
+// Función para obtener la IP pública
+const getPublicIP = async () => {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    console.log(`🌐 IP Pública del servidor: ${response.data.ip}`);
+  } catch (error) {
+    console.error('❌ No se pudo obtener la IP pública:', error.message);
+  }
+};
+
 app.post('/', async (req, res) => {
   try {
     const data = req.body;
 
-    // Extraer el mensaje enviado por TradingView
-    const message = data.message; // El mensaje enviado desde TradingView
-    console.log("Mensaje recibido de TradingView:", message);
+    const message = data.message;
+    console.log("📨 Mensaje recibido de TradingView:", message);
 
     let side = '';
     let symbol = '';
-    let quantity = '';
     let price = '';
 
-    // Verifica el tipo de señal y extrae los detalles
     if (message.includes("SELL")) {
       side = 'SELL';
-      // Extraer el símbolo y el precio de la señal de venta
       [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
     } else if (message.includes("BUY")) {
       side = 'BUY';
-      // Extraer el símbolo y el precio de la señal de compra
       [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+\.\d+)/);
     }
 
-    // Verifica que se haya procesado correctamente la señal
     if (!side || !symbol || !price) {
       throw new Error("❌ No se pudo procesar correctamente la señal");
     }
 
-    // Calcular la cantidad basada en 100 USDT
-    const usdtAmount = 100;  // Monto de la operación en USDT
-    const leverage = 3;      // Leverage de 3x
-    const totalAmount = usdtAmount * leverage;  // Monto total controlado
-    quantity = (totalAmount / parseFloat(price)).toFixed(6); // Aproximado de la cantidad a operar
+    // Ajuste de símbolo para futuros USDT-M
+    if (!symbol.endsWith("USDT")) {
+      symbol = symbol + "USDT";
+    }
+
+    // Calcular la cantidad basada en 100 USDT y apalancamiento 3x
+    const usdtAmount = 100; // Monto que quieres usar
+    const leverage = 3; // Apalancamiento deseado
+    const totalPositionSize = usdtAmount * leverage; // 300 USDT posición total
+    const quantity = (totalPositionSize / parseFloat(price)).toFixed(3); // Redondear a 3 decimales
 
     // Enviar mensaje a Telegram
     const telegramMessage = `
@@ -54,17 +63,16 @@ ${side === 'SELL' ? '🔴' : '🟢'} ${side} - ${symbol} a ${price} en 1
 - Tipo: ${side}
 - Símbolo: ${symbol}
 - Precio: $${price}
-- Cantidad: ${quantity} (${usdtAmount} USDT, con Leverage ${leverage}x)
+- Cantidad: ${quantity} (100 USDT con 3x leverage)
     `;
 
     await sendTelegramMessage(telegramMessage);
     console.log("✅ Mensaje enviado a Telegram");
 
-    // Enviar orden a Binance
-    await setLeverage(symbol, leverage);  // Establecer el leverage
-    await sendBinanceOrder(symbol, side, quantity, price, leverage);
+    // Ejecutar orden en Binance
+    await sendBinanceOrder(symbol, side, quantity);
 
-    res.status(200).send('✅ Señal procesada');
+    res.status(200).send('✅ Señal procesada correctamente');
   } catch (error) {
     console.error("❌ Error procesando la señal:", error.message);
     res.status(500).send('❌ Error interno del servidor');
@@ -79,8 +87,8 @@ const sendTelegramMessage = async (message) => {
   });
 };
 
-// Función para enviar orden a Binance
-const sendBinanceOrder = async (symbol, side, quantity, price, leverage) => {
+// Función para enviar orden a Binance (Futuros USDT-M)
+const sendBinanceOrder = async (symbol, side, quantity) => {
   try {
     const apiKey = process.env.BINANCE_API_KEY;
     const secret = process.env.BINANCE_API_SECRET;
@@ -92,24 +100,18 @@ const sendBinanceOrder = async (symbol, side, quantity, price, leverage) => {
       side: side,
       type: "MARKET",
       quantity: quantity,
-      price: price,
       timestamp: timestamp,
       recvWindow: recvWindow,
     };
 
-    // Crear string de firma
-    const orderedParams = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('&');
+    // Crear la firma
+    const query = Object.keys(params).map(k => `${k}=${params[k]}`).join('&');
+    const signature = crypto.createHmac('sha256', secret).update(query).digest('hex');
 
-    // Generar firma
-    const signature = crypto.createHmac('sha256', secret).update(orderedParams).digest('hex');
-
-    // Agregar firma
-    const finalParams = `${orderedParams}&signature=${signature}`;
-
-    // Enviar orden a Binance
+    // Mandar orden a Binance FUTURES endpoint
     const response = await axios.post(
-      `https://api.binance.com/api/v3/order?${finalParams}`,
-      {}, // cuerpo vacío
+      `https://fapi.binance.com/fapi/v1/order?${query}&signature=${signature}`,
+      {},
       {
         headers: {
           'X-MBX-APIKEY': apiKey,
@@ -118,54 +120,14 @@ const sendBinanceOrder = async (symbol, side, quantity, price, leverage) => {
       }
     );
 
-    console.log("✅ Orden enviada a Binance:", response.data);
+    console.log("✅ Orden enviada a Binance Futures:", response.data);
   } catch (error) {
     console.error("❌ Error enviando orden a Binance:", error.response?.data || error.message);
   }
 };
 
-// Función para establecer el Leverage en Binance
-const setLeverage = async (symbol, leverage) => {
-  try {
-    const apiKey = process.env.BINANCE_API_KEY;
-    const secret = process.env.BINANCE_API_SECRET;
-    const timestamp = Date.now();
-    const recvWindow = 5000;
-
-    const params = {
-      symbol: symbol,
-      leverage: leverage,
-      timestamp: timestamp,
-      recvWindow: recvWindow,
-    };
-
-    // Crear string de firma
-    const orderedParams = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('&');
-
-    // Generar firma
-    const signature = crypto.createHmac('sha256', secret).update(orderedParams).digest('hex');
-
-    // Agregar firma
-    const finalParams = `${orderedParams}&signature=${signature}`;
-
-    // Establecer leverage
-    const response = await axios.post(
-      `https://api.binance.com/api/v1/leverage?${finalParams}`,
-      {}, // cuerpo vacío
-      {
-        headers: {
-          'X-MBX-APIKEY': apiKey,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      }
-    );
-
-    console.log("✅ Leverage establecido:", response.data);
-  } catch (error) {
-    console.error("❌ Error estableciendo leverage:", error.response?.data || error.message);
-  }
-};
-
-app.listen(port, () => {
+// Arrancar el servidor y mostrar IP
+app.listen(port, async () => {
   console.log(`🚀 Servidor escuchando en el puerto ${port}`);
+  await getPublicIP();
 });
