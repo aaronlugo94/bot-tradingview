@@ -1,5 +1,3 @@
-// 📈 BOT v2 Mejorado - TradingView + Binance + Telegram
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
@@ -30,6 +28,17 @@ async function sendTelegram(message) {
     chat_id: TELEGRAM_CHAT_ID,
     text: message,
   });
+}
+
+// 👉 Función para obtener la IP pública de Railway
+async function getPublicIP() {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    return response.data.ip;
+  } catch (error) {
+    console.error("Error obteniendo la IP pública:", error);
+    return null;
+  }
 }
 
 // 👉 Función para consultar posición abierta en Binance Futures
@@ -126,7 +135,10 @@ app.post('/', async (req, res) => {
 
     console.log("✅ Nueva orden enviada:", orderResult);
 
-    // 5. Avisar a Telegram
+    // 5. Obtener la IP pública de Railway
+    const publicIP = await getPublicIP();
+
+    // 6. Avisar a Telegram con la IP pública incluida
     await sendTelegram(`
 🚀 Nueva operación ejecutada:
 
@@ -135,6 +147,7 @@ app.post('/', async (req, res) => {
 - Precio Aproximado: $${price}
 - Cantidad: ${quantity}
 - Order ID: ${orderResult.orderId}
+- IP de Railway: ${publicIP || 'No disponible'}
     `);
 
     res.status(200).send('✅ Señal procesada correctamente.');
