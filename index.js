@@ -13,13 +13,30 @@ app.post('/', async (req, res) => {
   try {
     const data = req.body;
 
-    // Extraer datos del mensaje
-    const message = data.message;
-    const [_, rawSide, rawPair, rawPrice] = message.match(/(BUY|SELL) - (\w+) a ([\d.]+)/);
-    const side = rawSide.toUpperCase();
-    const symbol = rawPair.toUpperCase();
-    const price = parseFloat(rawPrice);
-    const quantity = (1000 / price).toFixed(6); // Aproximado
+    // Extraer el mensaje enviado por TradingView
+    const message = data.message; // La alerta enviada desde TradingView
+    console.log("Mensaje recibido de TradingView:", message);
+
+    let side = '';
+    let symbol = '';
+    let quantity = '';
+    let price = '';
+
+    // Verifica el tipo de señal y extrae los detalles
+    if (message.includes("Buy Signal")) {
+      side = 'BUY';
+      [_, symbol, price] = message.match(/Buy Signal: (.+) at (\d+\.\d+)/);
+      quantity = (1000 / parseFloat(price)).toFixed(6); // Aproximado
+    } else if (message.includes("Sell Signal")) {
+      side = 'SELL';
+      [_, symbol, price] = message.match(/Sell Signal: (.+) at (\d+\.\d+)/);
+      quantity = (1000 / parseFloat(price)).toFixed(6); // Aproximado
+    }
+
+    // Verifica que se haya procesado correctamente la señal
+    if (!side || !symbol || !price || !quantity) {
+      throw new Error("❌ No se pudo procesar correctamente la señal");
+    }
 
     // Enviar mensaje a Telegram
     const telegramMessage = `
@@ -37,8 +54,8 @@ ${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price} en 1
     await sendTelegramMessage(telegramMessage);
     console.log("✅ Mensaje enviado a Telegram");
 
-    // Enviar orden a Bybit Testnet
-    await sendBybitOrder(symbol, side, quantity);
+    // Enviar orden a Binance
+    await sendBinanceOrder(symbol, side, quantity, price);
 
     res.status(200).send('✅ Señal procesada');
   } catch (error) {
@@ -55,22 +72,22 @@ const sendTelegramMessage = async (message) => {
   });
 };
 
-const sendBybitOrder = async (symbol, side, quantity) => {
+// Función para enviar orden a Binance
+const sendBinanceOrder = async (symbol, side, quantity, price) => {
   try {
-    const apiKey = process.env.BYBIT_API_KEY;
-    const secret = process.env.BYBIT_API_SECRET;
-    const recvWindow = 5000;
+    const apiKey = process.env.BINANCE_API_KEY;
+    const secret = process.env.BINANCE_API_SECRET;
     const timestamp = Date.now();
+    const recvWindow = 5000;
 
     const params = {
-      apiKey,
-      symbol,
-      side,
+      symbol: symbol,
+      side: side,
       type: "MARKET",
-      qty: quantity,
-      timeInForce: "GTC",
-      timestamp,
-      recvWindow,
+      quantity: quantity,
+      price: price,
+      timestamp: timestamp,
+      recvWindow: recvWindow,
     };
 
     // Crear string de firma
@@ -80,21 +97,23 @@ const sendBybitOrder = async (symbol, side, quantity) => {
     const signature = crypto.createHmac('sha256', secret).update(orderedParams).digest('hex');
 
     // Agregar firma
-    const finalParams = `${orderedParams}&sign=${signature}`;
+    const finalParams = `${orderedParams}&signature=${signature}`;
 
+    // Enviar orden a Binance
     const response = await axios.post(
-      `https://api-testnet.bybit.com/spot/v1/order?${finalParams}`,
+      `https://api.binance.com/api/v3/order?${finalParams}`,
       {}, // cuerpo vacío
       {
         headers: {
+          'X-MBX-APIKEY': apiKey,
           'Content-Type': 'application/x-www-form-urlencoded',
-        }
+        },
       }
     );
 
-    console.log("✅ Orden enviada a Bybit:", response.data);
+    console.log("✅ Orden enviada a Binance:", response.data);
   } catch (error) {
-    console.error("❌ Error enviando orden a Bybit Testnet:", error.response?.data || error.message);
+    console.error("❌ Error enviando orden a Binance:", error.response?.data || error.message);
   }
 };
 
