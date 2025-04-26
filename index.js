@@ -13,7 +13,11 @@ app.use(bodyParser.json());
 const getPublicIP = async () => {
   try {
     const response = await axios.get('https://api.ipify.org?format=json');
-    console.log(`🌐 IP Pública del servidor: ${response.data.ip}`);
+    const ip = response.data.ip;
+    console.log(`🌐 IP Pública del servidor: ${ip}`);
+
+    // También enviar IP a Telegram
+    await sendTelegramMessage(`🚀 Bot iniciado correctamente.\n🌐 IP pública del servidor: ${ip}`);
   } catch (error) {
     console.error('❌ No se pudo obtener la IP pública:', error.message);
   }
@@ -48,7 +52,7 @@ app.post('/', async (req, res) => {
     }
 
     // Calcular la cantidad basada en 100 USDT y apalancamiento 3x
-    const usdtAmount = 100; // Monto que quieres usar
+    const usdtAmount = 100; // Monto a usar
     const leverage = 3; // Apalancamiento deseado
     const totalPositionSize = usdtAmount * leverage; // 300 USDT posición total
     const quantity = (totalPositionSize / parseFloat(price)).toFixed(3); // Redondear a 3 decimales
@@ -87,7 +91,7 @@ const sendTelegramMessage = async (message) => {
   });
 };
 
-// Función para enviar orden a Binance (Futuros USDT-M)
+// Función para enviar orden a Binance Futures
 const sendBinanceOrder = async (symbol, side, quantity) => {
   try {
     const apiKey = process.env.BINANCE_API_KEY;
@@ -104,11 +108,9 @@ const sendBinanceOrder = async (symbol, side, quantity) => {
       recvWindow: recvWindow,
     };
 
-    // Crear la firma
     const query = Object.keys(params).map(k => `${k}=${params[k]}`).join('&');
     const signature = crypto.createHmac('sha256', secret).update(query).digest('hex');
 
-    // Mandar orden a Binance FUTURES endpoint
     const response = await axios.post(
       `https://fapi.binance.com/fapi/v1/order?${query}&signature=${signature}`,
       {},
@@ -126,7 +128,7 @@ const sendBinanceOrder = async (symbol, side, quantity) => {
   }
 };
 
-// Arrancar el servidor y mostrar IP
+// Arrancar el servidor y enviar IP a Telegram
 app.listen(port, async () => {
   console.log(`🚀 Servidor escuchando en el puerto ${port}`);
   await getPublicIP();
