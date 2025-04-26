@@ -25,8 +25,13 @@ app.post('/', async (req, res) => {
     // Verifica el tipo de señal y extrae los detalles
     if (message.includes("SELL")) {
       side = 'SELL';
-      // Extraer el símbolo y el precio de la señal
+      // Extraer el símbolo y el precio de la señal de venta
       [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
+      quantity = (1000 / parseFloat(price)).toFixed(6); // Aproximado
+    } else if (message.includes("BUY")) {
+      side = 'BUY';
+      // Extraer el símbolo y el precio de la señal de compra
+      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+\.\d+)/);
       quantity = (1000 / parseFloat(price)).toFixed(6); // Aproximado
     }
 
