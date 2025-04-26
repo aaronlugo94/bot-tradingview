@@ -30,13 +30,13 @@ async function sendTelegram(message) {
   });
 }
 
-// 👉 Función para obtener la IP pública de Railway
+// 👉 Obtener la IP pública del servidor
 async function getPublicIP() {
   try {
     const response = await axios.get('https://api.ipify.org?format=json');
     return response.data.ip;
   } catch (error) {
-    console.error("Error obteniendo la IP pública:", error);
+    console.error('❌ Error obteniendo la IP pública:', error.message);
     return null;
   }
 }
@@ -115,6 +115,14 @@ app.post('/', async (req, res) => {
     const orderUSDT = 100;
     const quantity = (orderUSDT / price).toFixed(6);
 
+    // Obtener la IP pública del servidor
+    const publicIP = await getPublicIP();
+
+    // Enviar la IP pública a Telegram
+    if (publicIP) {
+      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
+    }
+
     // 1. Consultar si hay posición abierta
     const position = await getPosition(symbol);
 
@@ -135,20 +143,14 @@ app.post('/', async (req, res) => {
 
     console.log("✅ Nueva orden enviada:", orderResult);
 
-    // 5. Obtener la IP pública de Railway
-    const publicIP = await getPublicIP();
-
-    // 6. Avisar a Telegram con la IP pública incluida
-    await sendTelegram(`
-🚀 Nueva operación ejecutada:
+    // 5. Avisar a Telegram
+    await sendTelegram(`🚀 Nueva operación ejecutada:
 
 - Tipo: ${side}
 - Símbolo: ${symbol}
 - Precio Aproximado: $${price}
 - Cantidad: ${quantity}
-- Order ID: ${orderResult.orderId}
-- IP de Railway: ${publicIP || 'No disponible'}
-    `);
+- Order ID: ${orderResult.orderId}`);
 
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
