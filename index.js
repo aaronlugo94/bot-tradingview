@@ -14,7 +14,7 @@ app.post('/', async (req, res) => {
     const data = req.body;
 
     // Extraer el mensaje enviado por TradingView
-    const message = data.message; // La alerta enviada desde TradingView
+    const message = data.message; // El mensaje enviado desde TradingView
     console.log("Mensaje recibido de TradingView:", message);
 
     let side = '';
@@ -23,13 +23,10 @@ app.post('/', async (req, res) => {
     let price = '';
 
     // Verifica el tipo de señal y extrae los detalles
-    if (message.includes("Buy Signal")) {
-      side = 'BUY';
-      [_, symbol, price] = message.match(/Buy Signal: (.+) at (\d+\.\d+)/);
-      quantity = (1000 / parseFloat(price)).toFixed(6); // Aproximado
-    } else if (message.includes("Sell Signal")) {
+    if (message.includes("SELL")) {
       side = 'SELL';
-      [_, symbol, price] = message.match(/Sell Signal: (.+) at (\d+\.\d+)/);
+      // Extraer el símbolo y el precio de la señal
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
       quantity = (1000 / parseFloat(price)).toFixed(6); // Aproximado
     }
 
@@ -42,7 +39,7 @@ app.post('/', async (req, res) => {
     const telegramMessage = `
 📡 Señal recibida de TradingView:
 
-${side === 'BUY' ? '🟢' : '🔴'} ${side} - ${symbol} a ${price} en 1
+${side === 'SELL' ? '🔴' : '🟢'} ${side} - ${symbol} a ${price} en 1
 
 📈 Ejecutando orden:
 - Tipo: ${side}
