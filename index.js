@@ -1,4 +1,4 @@
-const express = require('express'); 
+const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -7,7 +7,9 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 8080;
 
+// Soportar JSON y texto
 app.use(bodyParser.json());
+app.use(bodyParser.text({ type: "*/*" }));
 
 // Variables de entorno
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
@@ -116,10 +118,14 @@ async function closeOpposite(symbol, currentPositionAmt) {
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
-    const { message } = req.body;
+    console.log("Body recibido completo:", req.body);
+
+    const message = req.body.message || req.body.content || req.body.alert_message || req.body || '';
+
     if (!message) {
       throw new Error('❌ No se recibió mensaje válido.');
     }
+
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
@@ -130,7 +136,7 @@ app.post('/', async (req, res) => {
       side = 'SELL';
       [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
     } else {
-      throw new Error('Mensaje no reconocido.');
+      throw new Error('❌ Mensaje no reconocido.');
     }
 
     symbol = symbol.replace('PERP', '');
@@ -142,9 +148,9 @@ app.post('/', async (req, res) => {
 
     // Ajustar decimales dependiendo del par
     if (symbol.endsWith('USDT')) {
-      quantity = quantity.toFixed(3);
+      quantity = quantity.toFixed(3); // 3 decimales para crypto (BTC, ETH)
     } else {
-      quantity = quantity.toFixed(0);
+      quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
     }
 
     // Mostrar IP pública (opcional)
@@ -158,8 +164,10 @@ app.post('/', async (req, res) => {
 
     if (position && parseFloat(position.positionAmt) !== 0) {
       const posSide = parseFloat(position.positionAmt);
-      console.log('Cerrando posición existente...');
-      await closeOpposite(symbol, posSide);
+      if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
+        console.log('Cerrando posición existente...');
+        await closeOpposite(symbol, posSide);
+      }
     }
 
     // Asegurar leverage correcto
