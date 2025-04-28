@@ -14,14 +14,14 @@ const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// 👉 Firmar solicitudes
+// 👉 Helper para firmar solicitudes a Binance
 function sign(queryString) {
   return crypto.createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
     .digest('hex');
 }
 
-// 👉 Enviar mensaje a Telegram
+// 👉 Función para enviar mensajes a Telegram
 async function sendTelegram(message) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   await axios.post(url, {
@@ -30,7 +30,7 @@ async function sendTelegram(message) {
   });
 }
 
-// 👉 Obtener la IP pública
+// 👉 Obtener la IP pública del servidor
 async function getPublicIP() {
   try {
     const response = await axios.get('https://api.ipify.org?format=json');
@@ -41,15 +41,7 @@ async function getPublicIP() {
   }
 }
 
-// 👉 Obtener información del símbolo
-async function getSymbolInfo(symbol) {
-  const url = 'https://fapi.binance.com/fapi/v1/exchangeInfo';
-  const response = await axios.get(url);
-  const symbols = response.data.symbols;
-  return symbols.find(s => s.symbol === symbol);
-}
-
-// 👉 Obtener posición actual
+// 👉 Función para consultar posición abierta en Binance Futures
 async function getPosition(symbol) {
   const timestamp = Date.now();
   const params = `timestamp=${timestamp}`;
@@ -64,7 +56,7 @@ async function getPosition(symbol) {
   return positions.find(pos => pos.symbol === symbol) || null;
 }
 
-// 👉 Cambiar leverage
+// 👉 Función para cambiar leverage a 3x automáticamente
 async function setLeverage(symbol, leverage = 3) {
   const timestamp = Date.now();
   const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
@@ -76,7 +68,7 @@ async function setLeverage(symbol, leverage = 3) {
   await axios.post(url, {}, { headers });
 }
 
-// 👉 Mandar orden
+// 👉 Función para mandar orden a Binance Futures
 async function sendOrder(symbol, side, quantity) {
   const timestamp = Date.now();
   const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
@@ -89,9 +81,9 @@ async function sendOrder(symbol, side, quantity) {
   return response.data;
 }
 
-// 👉 Cerrar posición contraria
+// 👉 Función para cerrar posición contraria
 async function closeOpposite(symbol, currentPositionAmt) {
-  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
+  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY'; // Si tienes long -> SELL para cerrar. Si short -> BUY.
   const quantity = Math.abs(currentPositionAmt);
 
   await sendOrder(symbol, side, quantity);
@@ -99,7 +91,23 @@ async function closeOpposite(symbol, currentPositionAmt) {
   await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
 }
 
-// 🚀 Entrada principal
+// 👉 Función para obtener info de símbolo y saber stepSize y minQty
+async function getSymbolInfo(symbol) {
+  const response = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
+  const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
+  if (!symbolInfo) {
+    throw new Error(`Símbolo ${symbol} no encontrado en Binance Futures.`);
+  }
+
+  const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
+
+  return {
+    stepSize: parseFloat(lotSizeFilter.stepSize),
+    minQty: parseFloat(lotSizeFilter.minQty),
+  };
+}
+
+// 🚀 Punto principal de entrada
 app.post('/', async (req, res) => {
   try {
     const { message } = req.body;
@@ -119,40 +127,34 @@ app.post('/', async (req, res) => {
 
     symbol = symbol.replace('PERP', '');
     price = parseFloat(price);
-    const orderUSDT = 200; // Ahora son 200 USDT
+    const orderUSDT = 200; // ahora operamos 200 USDT
 
-    // 🔥 Obtener info real del símbolo
-    const symbolInfo = await getSymbolInfo(symbol);
+    // Obtener stepSize y minQty desde Binance
+    const { stepSize, minQty } = await getSymbolInfo(symbol);
 
-    if (!symbolInfo) {
-      throw new Error(`No se encontró información del símbolo: ${symbol}`);
-    }
-
-    const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
-    const stepSize = parseFloat(lotSizeFilter.stepSize);
-    const minQty = parseFloat(lotSizeFilter.minQty);
-
-    // Calcular cantidad base
+    // Calcular quantity
     let quantity = orderUSDT / price;
-
-    // Redondear al múltiplo correcto (stepSize)
     quantity = Math.floor(quantity / stepSize) * stepSize;
-    quantity = parseFloat(quantity.toFixed(8)); // Redondear
+    quantity = parseFloat(quantity.toFixed(8)); // evitar errores de decimales
 
-    if (quantity < minQty) {
-      throw new Error(`La cantidad calculada (${quantity}) es menor al mínimo permitido (${minQty})`);
+    // Verificar que quantity no sea inválida
+    if (quantity < minQty || quantity === 0) {
+      throw new Error(`❌ Cantidad calculada inválida (${quantity}). Aumenta monto en USDT.`);
     }
 
-    // 🔥 Obtener IP pública y mandar a Telegram
+    // Obtener IP pública del servidor
     const publicIP = await getPublicIP();
+
+    // Enviar IP a Telegram
     if (publicIP) {
       await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
     }
 
-    // 🔥 Cerrar posición si hay abierta
+    // 1. Consultar si hay posición abierta
     const position = await getPosition(symbol);
 
     if (position && parseFloat(position.positionAmt) !== 0) {
+      // 2. Cerrar posición previa si es necesario
       const posSide = parseFloat(position.positionAmt);
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         console.log('Cerrando posición existente...');
@@ -160,15 +162,15 @@ app.post('/', async (req, res) => {
       }
     }
 
-    // 🔥 Ajustar leverage a 3x
+    // 3. Ajustar leverage a 3x
     await setLeverage(symbol, 3);
 
-    // 🔥 Mandar nueva orden
+    // 4. Mandar nueva orden
     const orderResult = await sendOrder(symbol, side, quantity);
 
     console.log("✅ Nueva orden enviada:", orderResult);
 
-    // 🔥 Avisar a Telegram
+    // 5. Avisar a Telegram
     await sendTelegram(`🚀 Nueva operación ejecutada:
 
 - Tipo: ${side}
