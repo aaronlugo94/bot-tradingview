@@ -30,6 +30,27 @@ async function sendTelegram(message) {
   });
 }
 
+// 👉 Función para ajustar la cantidad (quantity) según el mínimo permitido
+function adjustQuantity(symbol, quantity) {
+  const minQty = {
+    BTCUSDT: 0.001,
+    ETHUSDT: 0.001,
+    // Agrega más símbolos si quieres
+  };
+  const stepSize = {
+    BTCUSDT: 0.001,
+    ETHUSDT: 0.001,
+    // Agrega más símbolos si quieres
+  };
+
+  const min = minQty[symbol] || 0.001;
+  const step = stepSize[symbol] || 0.001;
+
+  if (quantity < min) quantity = min;
+
+  return (Math.floor(quantity / step) * step).toFixed(6);
+}
+
 // 👉 Obtener la IP pública del servidor
 async function getPublicIP() {
   try {
@@ -41,7 +62,7 @@ async function getPublicIP() {
   }
 }
 
-// 👉 Función para consultar posición abierta en Binance Futures
+// 👉 Consultar posición abierta en Binance Futures
 async function getPosition(symbol) {
   const timestamp = Date.now();
   const params = `timestamp=${timestamp}`;
@@ -56,7 +77,7 @@ async function getPosition(symbol) {
   return positions.find(pos => pos.symbol === symbol) || null;
 }
 
-// 👉 Función para cambiar leverage a 3x automáticamente
+// 👉 Cambiar leverage a 3x automáticamente
 async function setLeverage(symbol, leverage = 3) {
   const timestamp = Date.now();
   const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
@@ -68,31 +89,22 @@ async function setLeverage(symbol, leverage = 3) {
   await axios.post(url, {}, { headers });
 }
 
-// 👉 Función para mandar orden a Binance Futures
+// 👉 Mandar orden a Binance Futures
 async function sendOrder(symbol, side, quantity) {
   const timestamp = Date.now();
   const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
   const signature = sign(params);
 
-  console.log("Enviando parámetros a Binance:", { symbol, side, quantity, timestamp });
-  console.log("Firma generada:", signature);
-
   const url = `https://fapi.binance.com/fapi/v1/order?${params}&signature=${signature}`;
   const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
 
-  try {
-    const response = await axios.post(url, {}, { headers });
-    console.log("Respuesta de Binance:", response.data);
-    return response.data;
-  } catch (error) {
-    console.error("Error en la solicitud a Binance:", error.response?.data || error.message);
-    throw new Error('Error en la solicitud a Binance');
-  }
+  const response = await axios.post(url, {}, { headers });
+  return response.data;
 }
 
-// 👉 Función para cerrar posición contraria
+// 👉 Cerrar posición contraria
 async function closeOpposite(symbol, currentPositionAmt) {
-  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY'; // Si tienes long -> SELL para cerrar. Si short -> BUY.
+  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
   const quantity = Math.abs(currentPositionAmt);
 
   await sendOrder(symbol, side, quantity);
@@ -110,33 +122,32 @@ app.post('/', async (req, res) => {
 
     if (message.includes('BUY')) {
       side = 'BUY';
-      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+\.\d+)/);
+      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
     } else if (message.includes('SELL')) {
       side = 'SELL';
-      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
     } else {
       throw new Error('Mensaje no reconocido.');
     }
 
     // Preparar datos
-    symbol = symbol.replace('PERP', '').trim(); // por si TradingView manda BTCUSDT.PERP
+    symbol = symbol.replace('PERP', '');
     price = parseFloat(price);
-    const orderUSDT = 100;
-    const quantity = (orderUSDT / price).toFixed(3); // Redondear a 3 decimales
+    const orderUSDT = 200; // ← Ahora 200 USD como pediste
+    let quantity = orderUSDT / price;
+    quantity = adjustQuantity(symbol, quantity);
 
     // Obtener la IP pública del servidor
     const publicIP = await getPublicIP();
 
-    // Enviar la IP pública a Telegram
     if (publicIP) {
       await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
     }
 
-    // 1. Consultar si hay posición abierta
+    // Consultar si hay posición abierta
     const position = await getPosition(symbol);
 
     if (position && parseFloat(position.positionAmt) !== 0) {
-      // 2. Cerrar posición previa si es necesario
       const posSide = parseFloat(position.positionAmt);
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         console.log('Cerrando posición existente...');
@@ -144,15 +155,15 @@ app.post('/', async (req, res) => {
       }
     }
 
-    // 3. Ajustar leverage a 3x
+    // Ajustar leverage
     await setLeverage(symbol, 3);
 
-    // 4. Mandar nueva orden
+    // Mandar nueva orden
     const orderResult = await sendOrder(symbol, side, quantity);
 
     console.log("✅ Nueva orden enviada:", orderResult);
 
-    // 5. Avisar a Telegram
+    // Avisar en Telegram
     await sendTelegram(`🚀 Nueva operación ejecutada:
 
 - Tipo: ${side}
