@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); 
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -106,13 +106,8 @@ async function closeOpposite(symbol, currentPositionAmt) {
     const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
     const quantity = Math.abs(currentPositionAmt);
 
-    const result = await sendOrder(symbol, side, quantity);
-    console.log("✅ Posición anterior cerrada:", result);
-
-    await sendTelegram(`🔄 Cierre de posición:
-- Tipo: ${side}
-- Símbolo: ${symbol}
-- Cantidad: ${quantity}`);
+    await sendOrder(symbol, side, quantity);
+    await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
   } catch (error) {
     console.error('❌ Error cerrando posición:', error.message);
   }
@@ -122,27 +117,20 @@ async function closeOpposite(symbol, currentPositionAmt) {
 app.post('/', async (req, res) => {
   try {
     const { message } = req.body;
-
     if (!message) {
-      throw new Error('No se recibió mensaje en el webhook.');
+      throw new Error('❌ No se recibió mensaje válido.');
     }
-
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
-
     if (message.includes('BUY')) {
       side = 'BUY';
-      const matches = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
-      if (!matches) throw new Error('Formato de mensaje BUY no reconocido.');
-      [, symbol, price] = matches;
+      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
     } else if (message.includes('SELL')) {
       side = 'SELL';
-      const matches = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
-      if (!matches) throw new Error('Formato de mensaje SELL no reconocido.');
-      [, symbol, price] = matches;
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
     } else {
-      throw new Error('Mensaje no contiene BUY ni SELL.');
+      throw new Error('Mensaje no reconocido.');
     }
 
     symbol = symbol.replace('PERP', '');
@@ -152,14 +140,14 @@ app.post('/', async (req, res) => {
     const orderUSDT = 200;
     let quantity = (orderUSDT / price);
 
-    // Ajustar decimales
+    // Ajustar decimales dependiendo del par
     if (symbol.endsWith('USDT')) {
       quantity = quantity.toFixed(3);
     } else {
       quantity = quantity.toFixed(0);
     }
 
-    // Obtener IP pública (opcional)
+    // Mostrar IP pública (opcional)
     const publicIP = await getPublicIP();
     if (publicIP) {
       await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
@@ -170,11 +158,8 @@ app.post('/', async (req, res) => {
 
     if (position && parseFloat(position.positionAmt) !== 0) {
       const posSide = parseFloat(position.positionAmt);
-
-      if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
-        console.log('Cerrando posición existente...');
-        await closeOpposite(symbol, posSide);
-      }
+      console.log('Cerrando posición existente...');
+      await closeOpposite(symbol, posSide);
     }
 
     // Asegurar leverage correcto
@@ -196,7 +181,7 @@ app.post('/', async (req, res) => {
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
     console.error("❌ Error:", error.message);
-    await sendTelegram(`❌ Error procesando señal: ${JSON.stringify(error.message)}`);
+    await sendTelegram(`❌ Error procesando señal: ${JSON.stringify(error.response?.data || error.message)}`);
     res.status(500).send('❌ Error interno.');
   }
 });
