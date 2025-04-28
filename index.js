@@ -30,27 +30,6 @@ async function sendTelegram(message) {
   });
 }
 
-// 👉 Función para ajustar la cantidad (quantity) según el mínimo permitido
-function adjustQuantity(symbol, quantity) {
-  const minQty = {
-    BTCUSDT: 0.001,
-    ETHUSDT: 0.001,
-    // Agrega más símbolos si quieres
-  };
-  const stepSize = {
-    BTCUSDT: 0.001,
-    ETHUSDT: 0.001,
-    // Agrega más símbolos si quieres
-  };
-
-  const min = minQty[symbol] || 0.001;
-  const step = stepSize[symbol] || 0.001;
-
-  if (quantity < min) quantity = min;
-
-  return (Math.floor(quantity / step) * step).toFixed(6);
-}
-
 // 👉 Obtener la IP pública del servidor
 async function getPublicIP() {
   try {
@@ -62,7 +41,7 @@ async function getPublicIP() {
   }
 }
 
-// 👉 Consultar posición abierta en Binance Futures
+// 👉 Función para consultar posición abierta en Binance Futures
 async function getPosition(symbol) {
   const timestamp = Date.now();
   const params = `timestamp=${timestamp}`;
@@ -77,7 +56,7 @@ async function getPosition(symbol) {
   return positions.find(pos => pos.symbol === symbol) || null;
 }
 
-// 👉 Cambiar leverage a 3x automáticamente
+// 👉 Función para cambiar leverage a 3x automáticamente
 async function setLeverage(symbol, leverage = 3) {
   const timestamp = Date.now();
   const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
@@ -89,7 +68,7 @@ async function setLeverage(symbol, leverage = 3) {
   await axios.post(url, {}, { headers });
 }
 
-// 👉 Mandar orden a Binance Futures
+// 👉 Función para mandar orden a Binance Futures
 async function sendOrder(symbol, side, quantity) {
   const timestamp = Date.now();
   const params = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
@@ -102,14 +81,27 @@ async function sendOrder(symbol, side, quantity) {
   return response.data;
 }
 
-// 👉 Cerrar posición contraria
+// 👉 Función para cerrar posición contraria
 async function closeOpposite(symbol, currentPositionAmt) {
-  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
+  const side = currentPositionAmt > 0 ? 'SELL' : 'BUY'; 
   const quantity = Math.abs(currentPositionAmt);
 
   await sendOrder(symbol, side, quantity);
-
   await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
+}
+
+// 👉 Ajuste correcto del quantity para evitar error 400
+function adjustQuantity(symbol, quantity) {
+  const stepSizes = {
+    BTCUSDT: 0.001,
+    ETHUSDT: 0.001,
+    // Puedes agregar más símbolos aquí si quieres
+  };
+
+  const step = stepSizes[symbol] || 0.001; // Por defecto usa 0.001
+  const precision = Math.log10(1 / step);
+  const factor = Math.pow(10, precision);
+  return (Math.floor(quantity * factor) / factor).toFixed(precision);
 }
 
 // 🚀 Punto principal de entrada
@@ -122,32 +114,34 @@ app.post('/', async (req, res) => {
 
     if (message.includes('BUY')) {
       side = 'BUY';
-      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
+      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a ([\d\.]+)/);
     } else if (message.includes('SELL')) {
       side = 'SELL';
-      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a ([\d\.]+)/);
     } else {
       throw new Error('Mensaje no reconocido.');
     }
 
-    // Preparar datos
-    symbol = symbol.replace('PERP', '');
+    symbol = symbol.replace('PERP', ''); 
     price = parseFloat(price);
-    const orderUSDT = 200; // ← Ahora 200 USD como pediste
+
+    // Monto de la orden en USDT
+    const orderUSDT = 200;
     let quantity = orderUSDT / price;
+
     quantity = adjustQuantity(symbol, quantity);
 
     // Obtener la IP pública del servidor
     const publicIP = await getPublicIP();
-
     if (publicIP) {
       await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
     }
 
-    // Consultar si hay posición abierta
+    // 1. Consultar si hay posición abierta
     const position = await getPosition(symbol);
 
     if (position && parseFloat(position.positionAmt) !== 0) {
+      // 2. Cerrar posición previa si es necesario
       const posSide = parseFloat(position.positionAmt);
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         console.log('Cerrando posición existente...');
@@ -155,15 +149,15 @@ app.post('/', async (req, res) => {
       }
     }
 
-    // Ajustar leverage
+    // 3. Ajustar leverage a 3x
     await setLeverage(symbol, 3);
 
-    // Mandar nueva orden
+    // 4. Mandar nueva orden
     const orderResult = await sendOrder(symbol, side, quantity);
 
     console.log("✅ Nueva orden enviada:", orderResult);
 
-    // Avisar en Telegram
+    // 5. Avisar a Telegram
     await sendTelegram(`🚀 Nueva operación ejecutada:
 
 - Tipo: ${side}
