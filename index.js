@@ -93,13 +93,14 @@ async function sendOrder(symbol, side, quantity, reduceOnly = false) {
 async function closeOpposite(symbol, currentPositionAmt, entryPrice) {
   try {
     const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
-    const quantity = Math.abs(currentPositionAmt).toFixed(3);
+    const quantity = Math.abs(currentPositionAmt).toFixed(3); // Ajustamos decimales
 
     const orderResult = await sendOrder(symbol, side, quantity, true);
 
     const markPriceData = await getMarkPrice(symbol);
     const markPrice = parseFloat(markPriceData.markPrice);
 
+    // Calcular PnL
     const pnl = (markPrice - entryPrice) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
 
     await sendTelegram(`🔄 Posición anterior cerrada:
@@ -125,6 +126,25 @@ async function getMarkPrice(symbol) {
   }
 }
 
+// 🔍 Obtener información del par (precision, stepSize, etc)
+async function getSymbolInfo(symbol) {
+  try {
+    const url = 'https://fapi.binance.com/fapi/v1/exchangeInfo';
+    const response = await axios.get(url);
+    const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
+    return symbolInfo;
+  } catch (error) {
+    console.error('❌ Error obteniendo exchangeInfo:', error.message);
+    throw error;
+  }
+}
+
+// ✨ Redondear cantidad al stepSize permitido
+function adjustQuantity(quantity, stepSize) {
+  const precision = Math.floor(Math.log10(1 / parseFloat(stepSize)));
+  return (Math.floor(quantity * Math.pow(10, precision)) / Math.pow(10, precision)).toFixed(precision);
+}
+
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
@@ -137,33 +157,30 @@ app.post('/', async (req, res) => {
 
     console.log("Mensaje recibido:", message);
 
-    let side, rawSymbol, price;
+    let side, symbol, price;
     if (message.includes('BUY')) {
       side = 'BUY';
-      [, rawSymbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
+      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
     } else if (message.includes('SELL')) {
       side = 'SELL';
-      [, rawSymbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
     } else {
       throw new Error('❌ Mensaje no reconocido.');
     }
 
-    if (!rawSymbol || !price) {
-      throw new Error('❌ Error extrayendo symbol o price.');
-    }
-
-    // Limpiar símbolo, eliminar "PERP" si existe y agregar "USDT" si falta
-    let symbol = rawSymbol.replace('PERP', '').replace(/[^a-zA-Z]/g, '').toUpperCase();
-    if (!symbol.endsWith('USDT')) {
-      symbol = symbol + 'USDT';
-    }
+    symbol = symbol.replace('PERP', '');
     price = parseFloat(price);
 
-    console.log(`🛠 Procesando orden: ${side} ${symbol} a $${price}`);
+    // Monto fijo de 200 USDT
+    const orderUSDT = 200;
+    let quantity = (orderUSDT / price);
 
-    const orderUSDT = 200; // Monto fijo en USDT
-    let quantity = orderUSDT / price;
-    quantity = quantity.toFixed(3); // Redondear a 3 decimales
+    // 🔥 Obtener info del símbolo (stepSize)
+    const symbolInfo = await getSymbolInfo(symbol);
+    const stepSize = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').stepSize;
+
+    // 🔥 Ajustar la quantity
+    quantity = adjustQuantity(quantity, stepSize);
 
     // Consultar posición actual
     const position = await getPosition(symbol);
