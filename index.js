@@ -1,95 +1,79 @@
-const axios = require('axios');
-const crypto = require('crypto');
-
-// API Keys
-const API_KEY = 'TU_API_KEY';
-const API_SECRET = 'TU_API_SECRET';
-const TELEGRAM_TOKEN = 'TU_TELEGRAM_BOT_TOKEN';
-const TELEGRAM_CHAT_ID = 'TU_TELEGRAM_CHAT_ID';
-
-// Función para firmar las solicitudes
-function sign(query) {
-  return crypto.createHmac('sha256', API_SECRET).update(query).digest('hex');
-}
-
-// Función para enviar mensajes a Telegram
-async function sendTelegramMessage(message) {
-  const telegramURL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-  await axios.post(telegramURL, {
-    chat_id: TELEGRAM_CHAT_ID,
-    text: message,
-  });
-}
-
-// Función para cerrar posición
-async function closePosition(symbol, side) {
+app.post('/', async (req, res) => {
   try {
-    const timestamp = Date.now();
-    const query = `symbol=${symbol}&side=${side}&type=MARKET&quantity=0.002&timestamp=${timestamp}`;
-    const signature = sign(query);
-    const url = `https://fapi.binance.com/fapi/v1/order?${query}&signature=${signature}`;
+    const { message } = req.body;
 
-    const response = await axios.post(url, null, {
-      headers: { 'X-MBX-APIKEY': API_KEY },
-    });
+    if (!message) {
+      throw new Error('No se recibió mensaje en el webhook.');
+    }
 
-    console.log('✅ Posición cerrada:', response.data);
-    await sendTelegramMessage(`✅ Cerrada posición ${side === 'BUY' ? 'SHORT' : 'LONG'} en ${symbol}`);
-  } catch (error) {
-    console.error('❌ Error al cerrar posición:', error.response ? error.response.data : error.message);
-    await sendTelegramMessage(`❌ Error al cerrar posición: ${error.message}`);
-  }
-}
+    console.log("Mensaje recibido:", message);
 
-// Función principal para procesar la señal
-async function processSignal(symbol, side) {
-  try {
-    // Primero, verificar las posiciones abiertas
-    const timestamp = Date.now();
-    const query = `timestamp=${timestamp}`;
-    const signature = sign(query);
-    const positionsUrl = `https://fapi.binance.com/fapi/v2/positionRisk?${query}&signature=${signature}`;
+    let side, symbol, price;
+    if (message.includes('BUY')) {
+      side = 'BUY';
+      const matches = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
+      if (!matches) throw new Error('Formato BUY no reconocido.');
+      [, symbol, price] = matches;
+    } else if (message.includes('SELL')) {
+      side = 'SELL';
+      const matches = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
+      if (!matches) throw new Error('Formato SELL no reconocido.');
+      [, symbol, price] = matches;
+    } else {
+      throw new Error('Mensaje no contiene BUY ni SELL.');
+    }
 
-    const positionsResponse = await axios.get(positionsUrl, {
-      headers: { 'X-MBX-APIKEY': API_KEY },
-    });
+    symbol = symbol.replace('PERP', '');
+    price = parseFloat(price);
 
-    const positions = positionsResponse.data;
-    const position = positions.find(p => p.symbol === symbol);
+    // Monto fijo de 200 USDT
+    const orderUSDT = 200;
+    let quantity = (orderUSDT / price);
 
-    // Si existe posición abierta, revisarla
-    if (position && position.positionAmt && parseFloat(position.positionAmt) !== 0) {
-      const positionAmt = parseFloat(position.positionAmt);
+    // Ajustar decimales dependiendo del par
+    if (symbol.endsWith('USDT')) {
+      quantity = quantity.toFixed(3); // 3 decimales
+    } else {
+      quantity = quantity.toFixed(0); // entero
+    }
 
-      if (positionAmt < 0 && side === 'BUY') {
-        // Hay un SHORT abierto, cerrar comprando
-        await closePosition(symbol, 'BUY');
-      } else if (positionAmt > 0 && side === 'SELL') {
-        // Hay un LONG abierto, cerrar vendiendo
-        await closePosition(symbol, 'SELL');
+    // Mostrar IP pública (opcional)
+    const publicIP = await getPublicIP();
+    if (publicIP) {
+      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
+    }
+
+    // Consultar posición actual
+    const position = await getPosition(symbol);
+
+    if (position && parseFloat(position.positionAmt) !== 0) {
+      const posSide = parseFloat(position.positionAmt);
+      if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
+        console.log('Cerrando posición existente...');
+        await closeOpposite(symbol, posSide);
       }
     }
 
-    // Luego de cerrar posiciones (si existía), abrir nueva orden
-    const quantity = 200 / parseFloat(position.markPrice); // 200 USDT
-    const formattedQuantity = parseFloat(quantity.toFixed(3)); // Redondear para evitar error de decimales
+    // Asegurar leverage correcto
+    await setLeverage(symbol, 3);
 
-    const orderQuery = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${formattedQuantity}&timestamp=${Date.now()}`;
-    const orderSignature = sign(orderQuery);
-    const orderUrl = `https://fapi.binance.com/fapi/v1/order?${orderQuery}&signature=${orderSignature}`;
+    // Crear nueva orden
+    const orderResult = await sendOrder(symbol, side, quantity);
 
-    const orderResponse = await axios.post(orderUrl, null, {
-      headers: { 'X-MBX-APIKEY': API_KEY },
-    });
+    console.log("✅ Nueva orden enviada:", orderResult);
 
-    console.log('✅ Nueva orden enviada:', orderResponse.data);
-    await sendTelegramMessage(`✅ Nueva orden ${side} en ${symbol} con ${formattedQuantity} cantidad.`);
+    await sendTelegram(`🚀 Nueva operación ejecutada:
+
+- Tipo: ${side}
+- Símbolo: ${symbol}
+- Precio Aproximado: $${price}
+- Cantidad: ${quantity}
+- Order ID: ${orderResult.orderId}`);
+
+    res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
-    console.error('❌ Error procesando señal:', error.response ? error.response.data : error.message);
-    await sendTelegramMessage(`❌ Error procesando señal: ${error.message}`);
+    console.error("❌ Error:", error.message);
+    await sendTelegram(`❌ Error procesando señal: ${JSON.stringify(error.message)}`);
+    res.status(500).send('❌ Error interno.');
   }
-}
-
-// Simulación de recepción de señal
-// Puedes llamar processSignal('BTCUSDT', 'BUY') o processSignal('BTCUSDT', 'SELL') según el mensaje recibido.
-
+});
