@@ -20,10 +20,7 @@ function sign(queryString) {
   const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
     .digest('hex');
-
-  // Verificar la firma generada
   console.log('Firma generada:', signature);
-
   return signature;
 }
 
@@ -35,8 +32,6 @@ async function sendTelegram(message) {
       chat_id: TELEGRAM_CHAT_ID,
       text: message,
     });
-
-    // Verificar la respuesta de Telegram
     console.log('Respuesta de Telegram:', response.data);
   } catch (error) {
     console.error('❌ Error enviando Telegram:', error.message);
@@ -67,7 +62,6 @@ async function getPosition(symbol) {
     const response = await axios.get(url, { headers });
     const positions = response.data;
 
-    // Verificar las posiciones obtenidas
     console.log('Posiciones abiertas:', positions);
 
     return positions.find(pos => pos.symbol === symbol) || null;
@@ -105,7 +99,6 @@ async function sendOrder(symbol, side, quantity) {
 
     const response = await axios.post(url, null, { headers });
 
-    // Verificar la respuesta de Binance
     console.log("Respuesta de Binance:", response.data);
 
     return response.data;
@@ -135,9 +128,16 @@ app.post('/', async (req, res) => {
     console.log("Cuerpo recibido:", req.body);
 
     const { message } = req.body;
+
+    // Verificar si el mensaje está definido
+    if (!message) {
+      throw new Error('El mensaje recibido es inválido o está vacío.');
+    }
+
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
+    // Verificar si el mensaje contiene BUY o SELL
     if (message.includes('BUY')) {
       side = 'BUY';
       [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
@@ -154,7 +154,6 @@ app.post('/', async (req, res) => {
     symbol = symbol.replace('PERP', ''); // Asegurarse de que no contiene 'PERP'
     price = parseFloat(price);
 
-    // Verificar si el símbolo y precio están correctamente formateados
     console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
 
     // Monto fijo de 200 USDT
@@ -171,7 +170,6 @@ app.post('/', async (req, res) => {
       quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
     }
 
-    // Verificar la cantidad ajustada
     console.log(`Cantidad ajustada: ${quantity}`);
 
     // Mostrar IP pública (opcional)
