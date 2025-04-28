@@ -71,24 +71,6 @@ async function setLeverage(symbol, leverage = 3) {
   }
 }
 
-// 👉 Obtener información del símbolo (para stepSize)
-async function getSymbolInfo(symbol) {
-  try {
-    const url = `https://fapi.binance.com/fapi/v1/exchangeInfo?symbol=${symbol}`;
-    const response = await axios.get(url);
-    return response.data.symbols[0];
-  } catch (error) {
-    console.error('❌ Error obteniendo información del símbolo:', error.message);
-    throw error;
-  }
-}
-
-// 👉 Ajustar cantidad según stepSize
-function adjustQuantity(quantity, stepSize) {
-  const precision = Math.floor(Math.log10(1 / stepSize)); 
-  return (Math.floor(quantity / stepSize) * stepSize).toFixed(precision);
-}
-
 // 👉 Enviar nueva orden
 async function sendOrder(symbol, side, quantity, reduceOnly = false) {
   try {
@@ -147,7 +129,7 @@ async function getMarkPrice(symbol) {
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
-    console.log("Body recibido completo:", req.body);
+    console.log("Body recibido completo:", JSON.stringify(req.body)); // Mostrar el cuerpo completo recibido
 
     const { message } = req.body;
 
@@ -171,20 +153,10 @@ app.post('/', async (req, res) => {
     symbol = symbol.replace('PERP', '');
     price = parseFloat(price);
 
-    if (isNaN(price) || price <= 0) {
-      throw new Error('❌ El precio proporcionado no es válido.');
-    }
-
     // Monto fijo de 200 USDT
     const orderUSDT = 200;
     let quantity = (orderUSDT / price);
-
-    // 🔥 Obtener info del símbolo (stepSize)
-    const symbolInfo = await getSymbolInfo(symbol);
-    const stepSize = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').stepSize;
-
-    // 🔥 Ajustar la quantity
-    quantity = adjustQuantity(quantity, stepSize);
+    quantity = quantity.toFixed(3); // Redondeamos a 3 decimales
 
     // Consultar posición actual
     const position = await getPosition(symbol);
