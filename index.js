@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); 
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -7,9 +7,7 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 8080;
 
-// Soportar JSON y texto
 app.use(bodyParser.json());
-app.use(bodyParser.text({ type: "*/*" }));
 
 // Variables de entorno
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
@@ -115,17 +113,23 @@ async function closeOpposite(symbol, currentPositionAmt) {
   }
 }
 
+// 🔥 Función para redondear la cantidad según el símbolo
+function roundToPrecision(symbol, quantity) {
+  const PRECISION = {
+    'BNBUSDT': 2,  // 2 decimales para BNB
+    'BTCUSDT': 3,  // 3 decimales para BTC
+    // Otros símbolos y su precisión
+  };
+
+  // Obtener la precisión del símbolo
+  const precision = PRECISION[symbol] || 2;  // Por defecto 2 si no se encuentra el símbolo
+  return quantity.toFixed(precision);  // Redondear la cantidad según la precisión
+}
+
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
-    console.log("Body recibido completo:", req.body);
-
-    const message = req.body.message || req.body.content || req.body.alert_message || req.body || '';
-
-    if (!message) {
-      throw new Error('❌ No se recibió mensaje válido.');
-    }
-
+    const { message } = req.body;
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
@@ -136,22 +140,18 @@ app.post('/', async (req, res) => {
       side = 'SELL';
       [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
     } else {
-      throw new Error('❌ Mensaje no reconocido.');
+      throw new Error('Mensaje no reconocido.');
     }
 
-    symbol = symbol.replace('PERP', '');
+    symbol = symbol.replace('PERP', '');  // Eliminar 'PERP' si existe
     price = parseFloat(price);
 
     // Monto fijo de 200 USDT
     const orderUSDT = 200;
     let quantity = (orderUSDT / price);
 
-    // Ajustar decimales dependiendo del par
-    if (symbol.endsWith('USDT')) {
-      quantity = quantity.toFixed(3); // 3 decimales para crypto (BTC, ETH)
-    } else {
-      quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
-    }
+    // Ajustar la cantidad a la precisión del símbolo
+    quantity = roundToPrecision(symbol, quantity);
 
     // Mostrar IP pública (opcional)
     const publicIP = await getPublicIP();
@@ -184,7 +184,7 @@ app.post('/', async (req, res) => {
 - Símbolo: ${symbol}
 - Precio Aproximado: $${price}
 - Cantidad: ${quantity}
-- Order ID: ${orderResult.orderId}`);
+- Order ID: ${orderResult.clientOrderId}`);
 
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
