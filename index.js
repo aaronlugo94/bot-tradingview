@@ -71,6 +71,24 @@ async function setLeverage(symbol, leverage = 3) {
   }
 }
 
+// 👉 Obtener información del símbolo (para stepSize)
+async function getSymbolInfo(symbol) {
+  try {
+    const url = `https://fapi.binance.com/fapi/v1/exchangeInfo?symbol=${symbol}`;
+    const response = await axios.get(url);
+    return response.data.symbols[0];
+  } catch (error) {
+    console.error('❌ Error obteniendo información del símbolo:', error.message);
+    throw error;
+  }
+}
+
+// 👉 Ajustar cantidad según stepSize
+function adjustQuantity(quantity, stepSize) {
+  const precision = Math.floor(Math.log10(1 / stepSize)); 
+  return (Math.floor(quantity / stepSize) * stepSize).toFixed(precision);
+}
+
 // 👉 Enviar nueva orden
 async function sendOrder(symbol, side, quantity, reduceOnly = false) {
   try {
@@ -126,32 +144,14 @@ async function getMarkPrice(symbol) {
   }
 }
 
-// 🔍 Obtener información del par (precision, stepSize, etc)
-async function getSymbolInfo(symbol) {
-  try {
-    const url = 'https://fapi.binance.com/fapi/v1/exchangeInfo';
-    const response = await axios.get(url);
-    const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
-    return symbolInfo;
-  } catch (error) {
-    console.error('❌ Error obteniendo exchangeInfo:', error.message);
-    throw error;
-  }
-}
-
-// ✨ Redondear cantidad al stepSize permitido
-function adjustQuantity(quantity, stepSize) {
-  const precision = Math.floor(Math.log10(1 / parseFloat(stepSize)));
-  return (Math.floor(quantity * Math.pow(10, precision)) / Math.pow(10, precision)).toFixed(precision);
-}
-
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
     console.log("Body recibido completo:", req.body);
 
     const { message } = req.body;
-    if (!message) {
+
+    if (!message || message.trim() === '') {
       throw new Error('❌ No se recibió mensaje válido.');
     }
 
@@ -170,6 +170,10 @@ app.post('/', async (req, res) => {
 
     symbol = symbol.replace('PERP', '');
     price = parseFloat(price);
+
+    if (isNaN(price) || price <= 0) {
+      throw new Error('❌ El precio proporcionado no es válido.');
+    }
 
     // Monto fijo de 200 USDT
     const orderUSDT = 200;
