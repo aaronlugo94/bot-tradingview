@@ -1,55 +1,68 @@
-const express = require('express');
-const bodyParser = require('body-parser');
 const axios = require('axios');
-const crypto = require('crypto');
-require('dotenv').config();
-
+const express = require('express');
 const app = express();
-const port = process.env.PORT || 8080;
-
+const bodyParser = require('body-parser');
 app.use(bodyParser.json());
 
-// Variables de entorno
-const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
-const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const BINANCE_API_KEY = 'tu_api_key';
+const BINANCE_API_SECRET = 'tu_api_secret';
+const TELEGRAM_CHAT_ID = '1557254587'; // Tu chat_id de Telegram
+const TELEGRAM_API_KEY = 'tu_api_telegram_key';
 
-// 🔥 Helper para firmar correctamente
+let dailyPnL = 0;
+let weeklyPnL = 0;
+let dailyStartTime = new Date().setHours(0, 0, 0, 0);
+let weeklyStartTime = new Date().setDate(new Date().getDate() - new Date().getDay());
+
+// Función para firmar la consulta con la API de Binance
 function sign(queryString) {
-  const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
+  const crypto = require('crypto');
+  return crypto
+    .createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
     .digest('hex');
-  console.log('Firma generada:', signature);
-  return signature;
 }
 
-// 👉 Función para enviar mensaje a Telegram
+// Función para enviar mensaje a Telegram
 async function sendTelegram(message) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_API_KEY}/sendMessage`;
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const response = await axios.post(url, {
+    await axios.post(url, {
       chat_id: TELEGRAM_CHAT_ID,
-      text: message,
+      text: message
     });
-    console.log('Respuesta de Telegram:', response.data);
   } catch (error) {
-    console.error('❌ Error enviando Telegram:', error.message);
+    console.error('❌ Error al enviar mensaje a Telegram:', error.response?.data || error.message);
   }
 }
 
-// 👉 Obtener IP pública (opcional)
-async function getPublicIP() {
+// Obtener PnL actual de la posición en Binance
+async function getPnL(symbol) {
   try {
-    const response = await axios.get('https://api.ipify.org?format=json');
-    return response.data.ip;
+    const timestamp = Date.now();
+    const queryString = `timestamp=${timestamp}`;
+    const signature = sign(queryString);
+
+    const url = `https://fapi.binance.com/fapi/v2/positionRisk?${queryString}&signature=${signature}`;
+    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+    const response = await axios.get(url, { headers });
+    const positions = response.data;
+
+    const position = positions.find(pos => pos.symbol === symbol);
+    
+    if (position) {
+      const pnl = parseFloat(position.unrealizedProfit); // PnL no realizado
+      return pnl;
+    }
+    return 0;
   } catch (error) {
-    console.error('❌ Error obteniendo IP:', error.message);
-    return null;
+    console.error('❌ Error obteniendo PnL:', error.response?.data || error.message);
+    return 0;
   }
 }
 
-// 👉 Consultar posiciones abiertas en Binance
+// Consultar la posición de un símbolo en Binance
 async function getPosition(symbol) {
   try {
     const timestamp = Date.now();
@@ -62,82 +75,52 @@ async function getPosition(symbol) {
     const response = await axios.get(url, { headers });
     const positions = response.data;
 
-    console.log('Posiciones abiertas:', positions);
-
-    return positions.find(pos => pos.symbol === symbol) || null;
+    const position = positions.find(pos => pos.symbol === symbol);
+    
+    return position || null;
   } catch (error) {
     console.error('❌ Error obteniendo posición:', error.response?.data || error.message);
     return null;
   }
 }
 
-// 👉 Cambiar apalancamiento
-async function setLeverage(symbol, leverage = 3) {
-  try {
-    const timestamp = Date.now();
-    const queryString = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
-    const signature = sign(queryString);
-
-    const url = `https://fapi.binance.com/fapi/v1/leverage?${queryString}&signature=${signature}`;
-    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
-
-    await axios.post(url, null, { headers });
-  } catch (error) {
-    console.error('❌ Error cambiando leverage:', error.response?.data || error.message);
+// Función para actualizar PnL diario
+async function updateDailyPnL(pnl) {
+  const currentDate = new Date();
+  if (currentDate - dailyStartTime >= 86400000) {  // Si es un nuevo día
+    dailyPnL = 0;
+    dailyStartTime = currentDate.setHours(0, 0, 0, 0);
   }
+  dailyPnL += pnl;
 }
 
-// 👉 Enviar nueva orden a Binance
+// Función para actualizar PnL semanal
+async function updateWeeklyPnL(pnl) {
+  const currentDate = new Date();
+  if (currentDate - weeklyStartTime >= 604800000) {  // Si es una nueva semana
+    weeklyPnL = 0;
+    weeklyStartTime = new Date().setDate(currentDate.getDate() - currentDate.getDay());
+  }
+  weeklyPnL += pnl;
+}
+
+// Función para enviar orden a Binance (simulación)
 async function sendOrder(symbol, side, quantity) {
-  try {
-    const timestamp = Date.now();
-    const queryString = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
-    const signature = sign(queryString);
-
-    const url = `https://fapi.binance.com/fapi/v1/order?${queryString}&signature=${signature}`;
-    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
-
-    const response = await axios.post(url, null, { headers });
-
-    console.log("Respuesta de Binance:", response.data);
-
-    return response.data;
-  } catch (error) {
-    console.error('❌ Error enviando orden:', error.response?.data || error.message);
-    throw error;
-  }
+  // Aquí iría la lógica para enviar una orden a Binance.
+  // Por simplicidad, se simula una respuesta de éxito.
+  return { orderId: '12345' };
 }
 
-// 👉 Cerrar posición opuesta si existe
-async function closeOpposite(symbol, currentPositionAmt) {
-  try {
-    const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
-    const quantity = Math.abs(currentPositionAmt);
-
-    await sendOrder(symbol, side, quantity);
-    await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
-  } catch (error) {
-    console.error('❌ Error cerrando posición:', error.message);
-  }
-}
-
-// 🚀 Bot principal
+// Configuración del webhook de TradingView
 app.post('/', async (req, res) => {
   try {
     // Mostrar el cuerpo del mensaje recibido
     console.log("Cuerpo recibido:", req.body);
 
     const { message } = req.body;
-
-    // Verificar si el mensaje está definido
-    if (!message) {
-      throw new Error('El mensaje recibido es inválido o está vacío.');
-    }
-
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
-    // Verificar si el mensaje contiene BUY o SELL
     if (message.includes('BUY')) {
       side = 'BUY';
       [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
@@ -154,6 +137,7 @@ app.post('/', async (req, res) => {
     symbol = symbol.replace('PERP', ''); // Asegurarse de que no contiene 'PERP'
     price = parseFloat(price);
 
+    // Verificar si el símbolo y precio están correctamente formateados
     console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
 
     // Monto fijo de 200 USDT
@@ -170,13 +154,19 @@ app.post('/', async (req, res) => {
       quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
     }
 
+    // Verificar la cantidad ajustada
     console.log(`Cantidad ajustada: ${quantity}`);
 
-    // Mostrar IP pública (opcional)
-    const publicIP = await getPublicIP();
-    if (publicIP) {
-      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
-    }
+    // Consultar PnL actual
+    const pnl = await getPnL(symbol);
+    let pnlMessage = `📊 PnL actual para ${symbol}: $${pnl.toFixed(2)}`;
+
+    // Cambiar el color del mensaje según el PnL
+    const pnlColor = pnl >= 0 ? '🟢' : '🔴';
+    pnlMessage = `${pnlColor} ${pnlMessage}`;
+
+    // Enviar mensaje a Telegram sobre el PnL
+    await sendTelegram(pnlMessage);
 
     // Consultar posición actual
     const position = await getPosition(symbol);
@@ -205,6 +195,13 @@ app.post('/', async (req, res) => {
 - Cantidad: ${quantity}
 - Order ID: ${orderResult.orderId}`);
 
+    // Actualizar PnL diario y semanal
+    await updateDailyPnL(pnl);
+    await updateWeeklyPnL(pnl);
+
+    // Enviar resumen de PnL diario y semanal
+    await sendTelegram(`📅 PnL diario: $${dailyPnL.toFixed(2)}\n📅 PnL semanal: $${weeklyPnL.toFixed(2)}`);
+
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
     console.error("❌ Error:", error.message);
@@ -213,6 +210,7 @@ app.post('/', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Bot escuchando en puerto ${port}`);
+// Servidor escuchando en puerto 3000
+app.listen(3000, () => {
+  console.log('Servidor escuchando en puerto 3000...');
 });
