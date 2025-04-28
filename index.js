@@ -17,25 +17,44 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // 🔥 Helper para firmar correctamente
 function sign(queryString) {
-  return crypto.createHmac('sha256', BINANCE_API_SECRET)
+  const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
     .digest('hex');
+
+  // Verificar la firma generada
+  console.log('Firma generada:', signature);
+
+  return signature;
 }
 
 // 👉 Función para enviar mensaje a Telegram
 async function sendTelegram(message) {
   try {
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    await axios.post(url, {
+    const response = await axios.post(url, {
       chat_id: TELEGRAM_CHAT_ID,
       text: message,
     });
+
+    // Verificar la respuesta de Telegram
+    console.log('Respuesta de Telegram:', response.data);
   } catch (error) {
     console.error('❌ Error enviando Telegram:', error.message);
   }
 }
 
-// 👉 Consultar posiciones abiertas
+// 👉 Obtener IP pública (opcional)
+async function getPublicIP() {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    return response.data.ip;
+  } catch (error) {
+    console.error('❌ Error obteniendo IP:', error.message);
+    return null;
+  }
+}
+
+// 👉 Consultar posiciones abiertas en Binance
 async function getPosition(symbol) {
   try {
     const timestamp = Date.now();
@@ -47,6 +66,9 @@ async function getPosition(symbol) {
 
     const response = await axios.get(url, { headers });
     const positions = response.data;
+
+    // Verificar las posiciones obtenidas
+    console.log('Posiciones abiertas:', positions);
 
     return positions.find(pos => pos.symbol === symbol) || null;
   } catch (error) {
@@ -71,17 +93,21 @@ async function setLeverage(symbol, leverage = 3) {
   }
 }
 
-// 👉 Enviar nueva orden
-async function sendOrder(symbol, side, quantity, reduceOnly = false) {
+// 👉 Enviar nueva orden a Binance
+async function sendOrder(symbol, side, quantity) {
   try {
     const timestamp = Date.now();
-    const query = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&reduceOnly=${reduceOnly}&timestamp=${timestamp}`;
-    const signature = sign(query);
+    const queryString = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+    const signature = sign(queryString);
 
-    const url = `https://fapi.binance.com/fapi/v1/order?${query}&signature=${signature}`;
+    const url = `https://fapi.binance.com/fapi/v1/order?${queryString}&signature=${signature}`;
     const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
 
     const response = await axios.post(url, null, { headers });
+
+    // Verificar la respuesta de Binance
+    console.log("Respuesta de Binance:", response.data);
+
     return response.data;
   } catch (error) {
     console.error('❌ Error enviando orden:', error.response?.data || error.message);
@@ -90,53 +116,25 @@ async function sendOrder(symbol, side, quantity, reduceOnly = false) {
 }
 
 // 👉 Cerrar posición opuesta si existe
-async function closeOpposite(symbol, currentPositionAmt, entryPrice) {
+async function closeOpposite(symbol, currentPositionAmt) {
   try {
     const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
-    const quantity = Math.abs(currentPositionAmt).toFixed(3); // Ajustamos decimales
+    const quantity = Math.abs(currentPositionAmt);
 
-    const orderResult = await sendOrder(symbol, side, quantity, true);
-
-    const markPriceData = await getMarkPrice(symbol);
-    const markPrice = parseFloat(markPriceData.markPrice);
-
-    // Calcular PnL
-    const pnl = (markPrice - entryPrice) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
-
-    await sendTelegram(`🔄 Posición anterior cerrada:
-- ${side} ${symbol}
-- Cantidad: ${quantity}
-- Entrada: $${entryPrice}
-- Precio cierre: $${markPrice.toFixed(2)}
-- PnL Aproximado: ${pnl.toFixed(2)} USDT`);
+    await sendOrder(symbol, side, quantity);
+    await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
   } catch (error) {
     console.error('❌ Error cerrando posición:', error.message);
-  }
-}
-
-// 👉 Obtener precio de mercado
-async function getMarkPrice(symbol) {
-  try {
-    const url = `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`;
-    const response = await axios.get(url);
-    return response.data;
-  } catch (error) {
-    console.error('❌ Error obteniendo mark price:', error.message);
-    throw error;
   }
 }
 
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
-    console.log("Body recibido completo:", JSON.stringify(req.body)); // Mostrar el cuerpo completo recibido
+    // Mostrar el cuerpo del mensaje recibido
+    console.log("Cuerpo recibido:", req.body);
 
     const { message } = req.body;
-
-    if (!message || message.trim() === '') {
-      throw new Error('❌ No se recibió mensaje válido.');
-    }
-
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
@@ -147,26 +145,49 @@ app.post('/', async (req, res) => {
       side = 'SELL';
       [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
     } else {
-      throw new Error('❌ Mensaje no reconocido.');
+      throw new Error('Mensaje no reconocido.');
     }
 
-    symbol = symbol.replace('PERP', '');
+    // Verificar la extracción del símbolo y precio
+    console.log(`Extracción - Símbolo: ${symbol}, Precio: ${price}`);
+
+    symbol = symbol.replace('PERP', ''); // Asegurarse de que no contiene 'PERP'
     price = parseFloat(price);
+
+    // Verificar si el símbolo y precio están correctamente formateados
+    console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
 
     // Monto fijo de 200 USDT
     const orderUSDT = 200;
     let quantity = (orderUSDT / price);
-    quantity = quantity.toFixed(3); // Redondeamos a 3 decimales
+
+    // Verificar la cantidad calculada
+    console.log(`Cantidad calculada: ${quantity}`);
+
+    // Ajustar decimales dependiendo del par
+    if (symbol.endsWith('USDT')) {
+      quantity = quantity.toFixed(3); // 3 decimales para crypto (BTC, ETH)
+    } else {
+      quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
+    }
+
+    // Verificar la cantidad ajustada
+    console.log(`Cantidad ajustada: ${quantity}`);
+
+    // Mostrar IP pública (opcional)
+    const publicIP = await getPublicIP();
+    if (publicIP) {
+      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
+    }
 
     // Consultar posición actual
     const position = await getPosition(symbol);
 
     if (position && parseFloat(position.positionAmt) !== 0) {
       const posSide = parseFloat(position.positionAmt);
-      const entryPrice = parseFloat(position.entryPrice);
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         console.log('Cerrando posición existente...');
-        await closeOpposite(symbol, posSide, entryPrice);
+        await closeOpposite(symbol, posSide);
       }
     }
 
@@ -179,6 +200,7 @@ app.post('/', async (req, res) => {
     console.log("✅ Nueva orden enviada:", orderResult);
 
     await sendTelegram(`🚀 Nueva operación ejecutada:
+
 - Tipo: ${side}
 - Símbolo: ${symbol}
 - Precio Aproximado: $${price}
