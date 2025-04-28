@@ -1,190 +1,95 @@
-const express = require('express');
-const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
-require('dotenv').config();
 
-const app = express();
-const port = process.env.PORT || 8080;
+// API Keys
+const API_KEY = 'TU_API_KEY';
+const API_SECRET = 'TU_API_SECRET';
+const TELEGRAM_TOKEN = 'TU_TELEGRAM_BOT_TOKEN';
+const TELEGRAM_CHAT_ID = 'TU_TELEGRAM_CHAT_ID';
 
-app.use(bodyParser.json());
-
-// Variables de entorno
-const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
-const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-
-// 🔥 Helper para firmar correctamente
-function sign(queryString) {
-  return crypto.createHmac('sha256', BINANCE_API_SECRET)
-    .update(queryString)
-    .digest('hex');
+// Función para firmar las solicitudes
+function sign(query) {
+  return crypto.createHmac('sha256', API_SECRET).update(query).digest('hex');
 }
 
-// 👉 Función para enviar mensaje a Telegram
-async function sendTelegram(message) {
+// Función para enviar mensajes a Telegram
+async function sendTelegramMessage(message) {
+  const telegramURL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+  await axios.post(telegramURL, {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: message,
+  });
+}
+
+// Función para cerrar posición
+async function closePosition(symbol, side) {
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    await axios.post(url, {
-      chat_id: TELEGRAM_CHAT_ID,
-      text: message,
+    const timestamp = Date.now();
+    const query = `symbol=${symbol}&side=${side}&type=MARKET&quantity=0.002&timestamp=${timestamp}`;
+    const signature = sign(query);
+    const url = `https://fapi.binance.com/fapi/v1/order?${query}&signature=${signature}`;
+
+    const response = await axios.post(url, null, {
+      headers: { 'X-MBX-APIKEY': API_KEY },
     });
+
+    console.log('✅ Posición cerrada:', response.data);
+    await sendTelegramMessage(`✅ Cerrada posición ${side === 'BUY' ? 'SHORT' : 'LONG'} en ${symbol}`);
   } catch (error) {
-    console.error('❌ Error enviando Telegram:', error.message);
+    console.error('❌ Error al cerrar posición:', error.response ? error.response.data : error.message);
+    await sendTelegramMessage(`❌ Error al cerrar posición: ${error.message}`);
   }
 }
 
-// 👉 Obtener IP pública (opcional)
-async function getPublicIP() {
+// Función principal para procesar la señal
+async function processSignal(symbol, side) {
   try {
-    const response = await axios.get('https://api.ipify.org?format=json');
-    return response.data.ip;
-  } catch (error) {
-    console.error('❌ Error obteniendo IP:', error.message);
-    return null;
-  }
-}
-
-// 👉 Consultar posiciones abiertas en Binance
-async function getPosition(symbol) {
-  try {
+    // Primero, verificar las posiciones abiertas
     const timestamp = Date.now();
-    const queryString = `timestamp=${timestamp}`;
-    const signature = sign(queryString);
+    const query = `timestamp=${timestamp}`;
+    const signature = sign(query);
+    const positionsUrl = `https://fapi.binance.com/fapi/v2/positionRisk?${query}&signature=${signature}`;
 
-    const url = `https://fapi.binance.com/fapi/v2/positionRisk?${queryString}&signature=${signature}`;
-    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+    const positionsResponse = await axios.get(positionsUrl, {
+      headers: { 'X-MBX-APIKEY': API_KEY },
+    });
 
-    const response = await axios.get(url, { headers });
-    const positions = response.data;
+    const positions = positionsResponse.data;
+    const position = positions.find(p => p.symbol === symbol);
 
-    return positions.find(pos => pos.symbol === symbol) || null;
-  } catch (error) {
-    console.error('❌ Error obteniendo posición:', error.response?.data || error.message);
-    return null;
-  }
-}
+    // Si existe posición abierta, revisarla
+    if (position && position.positionAmt && parseFloat(position.positionAmt) !== 0) {
+      const positionAmt = parseFloat(position.positionAmt);
 
-// 👉 Cambiar apalancamiento
-async function setLeverage(symbol, leverage = 3) {
-  try {
-    const timestamp = Date.now();
-    const queryString = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
-    const signature = sign(queryString);
-
-    const url = `https://fapi.binance.com/fapi/v1/leverage?${queryString}&signature=${signature}`;
-    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
-
-    await axios.post(url, null, { headers });
-  } catch (error) {
-    console.error('❌ Error cambiando leverage:', error.response?.data || error.message);
-  }
-}
-
-// 👉 Enviar nueva orden a Binance
-async function sendOrder(symbol, side, quantity) {
-  try {
-    const timestamp = Date.now();
-    const queryString = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
-    const signature = sign(queryString);
-
-    const url = `https://fapi.binance.com/fapi/v1/order?${queryString}&signature=${signature}`;
-    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
-
-    const response = await axios.post(url, null, { headers });
-    return response.data;
-  } catch (error) {
-    console.error('❌ Error enviando orden:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// 👉 Cerrar posición opuesta si existe
-async function closeOpposite(symbol, currentPositionAmt) {
-  try {
-    const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
-    const quantity = Math.abs(currentPositionAmt);
-
-    await sendOrder(symbol, side, quantity);
-    await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
-  } catch (error) {
-    console.error('❌ Error cerrando posición:', error.message);
-  }
-}
-
-// 🚀 Bot principal
-app.post('/', async (req, res) => {
-  try {
-    const { message } = req.body;
-    console.log("Mensaje recibido:", message);
-
-    let side, symbol, price;
-    if (message.includes('BUY')) {
-      side = 'BUY';
-      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
-    } else if (message.includes('SELL')) {
-      side = 'SELL';
-      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
-    } else {
-      throw new Error('Mensaje no reconocido.');
-    }
-
-    symbol = symbol.replace('PERP', '');
-    price = parseFloat(price);
-
-    // Monto fijo de 200 USDT
-    const orderUSDT = 200;
-    let quantity = (orderUSDT / price);
-
-    // Ajustar decimales dependiendo del par
-    if (symbol.endsWith('USDT')) {
-      quantity = quantity.toFixed(3); // 3 decimales para crypto (BTC, ETH)
-    } else {
-      quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
-    }
-
-    // Mostrar IP pública (opcional)
-    const publicIP = await getPublicIP();
-    if (publicIP) {
-      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
-    }
-
-    // Consultar posición actual
-    const position = await getPosition(symbol);
-
-    if (position && parseFloat(position.positionAmt) !== 0) {
-      const posSide = parseFloat(position.positionAmt);
-      if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
-        console.log('Cerrando posición existente...');
-        await closeOpposite(symbol, posSide);
+      if (positionAmt < 0 && side === 'BUY') {
+        // Hay un SHORT abierto, cerrar comprando
+        await closePosition(symbol, 'BUY');
+      } else if (positionAmt > 0 && side === 'SELL') {
+        // Hay un LONG abierto, cerrar vendiendo
+        await closePosition(symbol, 'SELL');
       }
     }
 
-    // Asegurar leverage correcto
-    await setLeverage(symbol, 3);
+    // Luego de cerrar posiciones (si existía), abrir nueva orden
+    const quantity = 200 / parseFloat(position.markPrice); // 200 USDT
+    const formattedQuantity = parseFloat(quantity.toFixed(3)); // Redondear para evitar error de decimales
 
-    // Crear nueva orden
-    const orderResult = await sendOrder(symbol, side, quantity);
+    const orderQuery = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${formattedQuantity}&timestamp=${Date.now()}`;
+    const orderSignature = sign(orderQuery);
+    const orderUrl = `https://fapi.binance.com/fapi/v1/order?${orderQuery}&signature=${orderSignature}`;
 
-    console.log("✅ Nueva orden enviada:", orderResult);
+    const orderResponse = await axios.post(orderUrl, null, {
+      headers: { 'X-MBX-APIKEY': API_KEY },
+    });
 
-    await sendTelegram(`🚀 Nueva operación ejecutada:
-
-- Tipo: ${side}
-- Símbolo: ${symbol}
-- Precio Aproximado: $${price}
-- Cantidad: ${quantity}
-- Order ID: ${orderResult.orderId}`);
-
-    res.status(200).send('✅ Señal procesada correctamente.');
+    console.log('✅ Nueva orden enviada:', orderResponse.data);
+    await sendTelegramMessage(`✅ Nueva orden ${side} en ${symbol} con ${formattedQuantity} cantidad.`);
   } catch (error) {
-    console.error("❌ Error:", error.message);
-    await sendTelegram(`❌ Error procesando señal: ${JSON.stringify(error.response?.data || error.message)}`);
-    res.status(500).send('❌ Error interno.');
+    console.error('❌ Error procesando señal:', error.response ? error.response.data : error.message);
+    await sendTelegramMessage(`❌ Error procesando señal: ${error.message}`);
   }
-});
+}
 
-app.listen(port, () => {
-  console.log(`🚀 Bot escuchando en puerto ${port}`);
-});
+// Simulación de recepción de señal
+// Puedes llamar processSignal('BTCUSDT', 'BUY') o processSignal('BTCUSDT', 'SELL') según el mensaje recibido.
+
