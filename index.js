@@ -77,6 +77,14 @@ async function sendOrder(symbol, side, quantity) {
   const url = `https://fapi.binance.com/fapi/v1/order?${params}&signature=${signature}`;
   const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
 
+  // Log de debugging antes de hacer la orden
+  console.log(`✅ Preparando orden para Binance:
+- Símbolo: ${symbol}
+- Lado: ${side}
+- Cantidad: ${quantity}
+- Parámetros: ${params}
+- URL: ${url}`);
+
   const response = await axios.post(url, {}, { headers });
   return response.data;
 }
@@ -91,22 +99,6 @@ async function closeOpposite(symbol, currentPositionAmt) {
   await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
 }
 
-// 👉 Función para obtener info de símbolo y saber stepSize y minQty
-async function getSymbolInfo(symbol) {
-  const response = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
-  const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
-  if (!symbolInfo) {
-    throw new Error(`Símbolo ${symbol} no encontrado en Binance Futures.`);
-  }
-
-  const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
-
-  return {
-    stepSize: parseFloat(lotSizeFilter.stepSize),
-    minQty: parseFloat(lotSizeFilter.minQty),
-  };
-}
-
 // 🚀 Punto principal de entrada
 app.post('/', async (req, res) => {
   try {
@@ -117,35 +109,29 @@ app.post('/', async (req, res) => {
 
     if (message.includes('BUY')) {
       side = 'BUY';
-      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+(\.\d+)?)/);
+      [_, symbol, price] = message.match(/🟢 BUY - (.+?) a (\d+\.\d+)/);
     } else if (message.includes('SELL')) {
       side = 'SELL';
-      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+(\.\d+)?)/);
+      [_, symbol, price] = message.match(/🔴 SELL - (.+?) a (\d+\.\d+)/);
     } else {
       throw new Error('Mensaje no reconocido.');
     }
 
-    symbol = symbol.replace('PERP', '');
+    // Preparar datos
+    symbol = symbol.replace('PERP', ''); // por si TradingView manda BTCUSDT.PERP
     price = parseFloat(price);
-    const orderUSDT = 200; // ahora operamos 200 USDT
+    const orderUSDT = 200; // Actualizamos el valor a 200 USDT
+    const quantity = (orderUSDT / price).toFixed(6);
 
-    // Obtener stepSize y minQty desde Binance
-    const { stepSize, minQty } = await getSymbolInfo(symbol);
+    // Log de debugging
+    console.log(`✅ Datos de la orden calculados:
+- Precio recibido: ${price}
+- Cantidad calculada: ${quantity}`);
 
-    // Calcular quantity
-    let quantity = orderUSDT / price;
-    quantity = Math.floor(quantity / stepSize) * stepSize;
-    quantity = parseFloat(quantity.toFixed(8)); // evitar errores de decimales
-
-    // Verificar que quantity no sea inválida
-    if (quantity < minQty || quantity === 0) {
-      throw new Error(`❌ Cantidad calculada inválida (${quantity}). Aumenta monto en USDT.`);
-    }
-
-    // Obtener IP pública del servidor
+    // Obtener la IP pública del servidor
     const publicIP = await getPublicIP();
 
-    // Enviar IP a Telegram
+    // Enviar la IP pública a Telegram
     if (publicIP) {
       await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
     }
@@ -181,8 +167,8 @@ app.post('/', async (req, res) => {
 
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
-    console.error("❌ Error:", error.message);
-    await sendTelegram(`❌ Error procesando señal: ${error.message}`);
+    console.error("❌ Error:", error.response ? error.response.data : error.message);
+    await sendTelegram(`❌ Error procesando señal: ${error.response ? JSON.stringify(error.response.data) : error.message}`);
     res.status(500).send('❌ Error interno.');
   }
 });
