@@ -15,14 +15,6 @@ const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// PnL almacenado
-let dailyPnL = 0;
-let weeklyPnL = 0;
-
-// Variables para controlar cuándo enviar los mensajes
-let lastDailyPnLSentDate = null;
-let lastWeeklyPnLSentDate = null;
-
 // 🔥 Helper para firmar correctamente
 function sign(queryString) {
   const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
@@ -119,7 +111,7 @@ async function closeOpposite(symbol, currentPositionAmt) {
   }
 }
 
-// 👉 Calcular PnL
+// 👉 Calcular PnL por operación
 async function calculatePnL(symbol) {
   try {
     const timestamp = Date.now();
@@ -136,28 +128,14 @@ async function calculatePnL(symbol) {
     if (!position) return;
 
     const pnl = parseFloat(position.unrealizedProfit);
+    
+    // Enviar el PnL de la operación
+    const pnlMessage = `📊 PnL de la operación:
 
-    dailyPnL += pnl;
-    weeklyPnL += pnl;
+    - ${pnl > 0 ? '🟢' : '🔴'} ${pnl > 0 ? 'Ganancia' : 'Pérdida'}: $${pnl.toFixed(2)}
+    - Símbolo: ${symbol}`;
 
-    // Enviar PnL diario solo una vez al día
-    const now = new Date();
-    const isNewDay = !lastDailyPnLSentDate || now.getDate() !== lastDailyPnLSentDate.getDate();
-    if (isNewDay) {
-      lastDailyPnLSentDate = now;
-      await sendTelegram(`📊 PnL Diario:
-      - ${pnl > 0 ? '🟢' : '🔴'} ${pnl > 0 ? 'Ganancia' : 'Pérdida'}: $${pnl.toFixed(2)}
-      - Total Diario: $${dailyPnL.toFixed(2)}`);
-    }
-
-    // Enviar PnL semanal solo una vez a la semana
-    const isNewWeek = !lastWeeklyPnLSentDate || now.getWeek() !== lastWeeklyPnLSentDate.getWeek();
-    if (isNewWeek) {
-      lastWeeklyPnLSentDate = now;
-      await sendTelegram(`📊 PnL Semanal:
-      - ${weeklyPnL > 0 ? '🟢' : '🔴'} ${weeklyPnL > 0 ? 'Ganancia' : 'Pérdida'}: $${weeklyPnL.toFixed(2)}
-      - Total Semanal: $${weeklyPnL.toFixed(2)}`);
-    }
+    await sendTelegram(pnlMessage);
   } catch (error) {
     console.error('❌ Error calculando PnL:', error.message);
   }
@@ -241,7 +219,7 @@ app.post('/', async (req, res) => {
 - Cantidad: ${quantity}
 - Order ID: ${orderResult.orderId}`);
 
-    // Calcular y enviar PnL
+    // Calcular y enviar PnL de la operación
     await calculatePnL(symbol);
 
     res.status(200).send('✅ Señal procesada correctamente.');
