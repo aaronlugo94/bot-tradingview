@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); 
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -17,27 +17,19 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // 🔥 Helper para firmar correctamente
 function sign(queryString) {
-  const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
+  return crypto.createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
     .digest('hex');
-
-  // Verificar la firma generada
-  console.log('Firma generada:', signature);
-
-  return signature;
 }
 
 // 👉 Función para enviar mensaje a Telegram
 async function sendTelegram(message) {
   try {
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const response = await axios.post(url, {
+    await axios.post(url, {
       chat_id: TELEGRAM_CHAT_ID,
       text: message,
     });
-
-    // Verificar la respuesta de Telegram
-    console.log('Respuesta de Telegram:', response.data);
   } catch (error) {
     console.error('❌ Error enviando Telegram:', error.message);
   }
@@ -66,9 +58,6 @@ async function getPosition(symbol) {
 
     const response = await axios.get(url, { headers });
     const positions = response.data;
-
-    // Verificar las posiciones obtenidas
-    console.log('Posiciones abiertas:', positions);
 
     return positions.find(pos => pos.symbol === symbol) || null;
   } catch (error) {
@@ -104,10 +93,6 @@ async function sendOrder(symbol, side, quantity) {
     const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
 
     const response = await axios.post(url, null, { headers });
-
-    // Verificar la respuesta de Binance
-    console.log("Respuesta de Binance:", response.data);
-
     return response.data;
   } catch (error) {
     console.error('❌ Error enviando orden:', error.response?.data || error.message);
@@ -128,12 +113,22 @@ async function closeOpposite(symbol, currentPositionAmt) {
   }
 }
 
+// 🔥 Función para redondear la cantidad según el símbolo
+function roundToPrecision(symbol, quantity) {
+  const PRECISION = {
+    'BNBUSDT': 2,  // 2 decimales para BNB
+    'BTCUSDT': 3,  // 3 decimales para BTC
+    // Otros símbolos y su precisión
+  };
+
+  // Obtener la precisión del símbolo
+  const precision = PRECISION[symbol] || 2;  // Por defecto 2 si no se encuentra el símbolo
+  return quantity.toFixed(precision);  // Redondear la cantidad según la precisión
+}
+
 // 🚀 Bot principal
 app.post('/', async (req, res) => {
   try {
-    // Mostrar el cuerpo del mensaje recibido
-    console.log("Cuerpo recibido:", req.body);
-
     const { message } = req.body;
     console.log("Mensaje recibido:", message);
 
@@ -148,31 +143,15 @@ app.post('/', async (req, res) => {
       throw new Error('Mensaje no reconocido.');
     }
 
-    // Verificar la extracción del símbolo y precio
-    console.log(`Extracción - Símbolo: ${symbol}, Precio: ${price}`);
-
-    symbol = symbol.replace('PERP', ''); // Asegurarse de que no contiene 'PERP'
+    symbol = symbol.replace('PERP', '');  // Eliminar 'PERP' si existe
     price = parseFloat(price);
-
-    // Verificar si el símbolo y precio están correctamente formateados
-    console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
 
     // Monto fijo de 200 USDT
     const orderUSDT = 200;
     let quantity = (orderUSDT / price);
 
-    // Verificar la cantidad calculada
-    console.log(`Cantidad calculada: ${quantity}`);
-
-    // Ajustar decimales dependiendo del par
-    if (symbol.endsWith('USDT')) {
-      quantity = quantity.toFixed(3); // 3 decimales para crypto (BTC, ETH)
-    } else {
-      quantity = quantity.toFixed(0); // enteros para otros activos si fuera necesario
-    }
-
-    // Verificar la cantidad ajustada
-    console.log(`Cantidad ajustada: ${quantity}`);
+    // Ajustar la cantidad a la precisión del símbolo
+    quantity = roundToPrecision(symbol, quantity);
 
     // Mostrar IP pública (opcional)
     const publicIP = await getPublicIP();
@@ -205,7 +184,7 @@ app.post('/', async (req, res) => {
 - Símbolo: ${symbol}
 - Precio Aproximado: $${price}
 - Cantidad: ${quantity}
-- Order ID: ${orderResult.orderId}`);
+- Order ID: ${orderResult.clientOrderId}`);
 
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
