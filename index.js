@@ -87,6 +87,24 @@ async function setLeverage(symbol, leverage = 3) {
   }
 }
 
+// 👉 Obtener precio de mercado (markPrice)
+async function getMarkPrice(symbol) {
+  try {
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
+    const signature = sign(queryString);
+
+    const url = `https://fapi.binance.com/fapi/v1/premiumIndex?${queryString}&signature=${signature}`;
+    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+    const response = await axios.get(url, { headers });
+    return parseFloat(response.data.markPrice);
+  } catch (error) {
+    console.error('❌ Error obteniendo el precio de mercado:', error.response?.data || error.message);
+    return null;
+  }
+}
+
 // 👉 Enviar nueva orden a Binance
 async function sendOrder(symbol, side, quantity) {
   try {
@@ -108,36 +126,29 @@ async function sendOrder(symbol, side, quantity) {
   }
 }
 
-// 👉 Obtener el precio de mercado actual
-async function getMarkPrice(symbol) {
-  try {
-    const url = `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol}`;
-    const response = await axios.get(url);
-    return parseFloat(response.data.price);
-  } catch (error) {
-    console.error('❌ Error obteniendo el precio de mercado:', error.message);
-    return 0;
-  }
-}
-
 // 👉 Cerrar posición opuesta si existe
-async function closeOpposite(symbol, currentPositionAmt, entryPrice, side) {
+async function closeOpposite(symbol, currentPositionAmt, side, quantity) {
   try {
-    const markPrice = await getMarkPrice(symbol); // Precio actual del mercado
-    const pnl = (markPrice - entryPrice) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
+    const oppositeSide = currentPositionAmt > 0 ? 'SELL' : 'BUY';
+    const quantityToClose = Math.abs(currentPositionAmt);
 
-    // Determinar el color del mensaje (rojo para pérdida, verde para ganancia)
-    const pnlColor = pnl >= 0 ? '🟢' : '🔴';
+    await sendOrder(symbol, oppositeSide, quantityToClose);
+    await sendTelegram(`🔄 Posición anterior cerrada:
+- ${oppositeSide} ${symbol}
+- Cantidad: ${quantityToClose}
+- Entrada: $${quantity}`);
 
-    // Enviar mensaje con PnL
-    await sendTelegram(`
-🔄 Posición anterior cerrada:
-- Tipo: ${side} ${symbol}
-- Cantidad: ${currentPositionAmt}
-- Entrada: $${entryPrice.toFixed(2)}
-- Precio de Cierre: $${markPrice.toFixed(2)}
-- PnL Aproximado: ${pnlColor} $${pnl.toFixed(2)} USDT
-    `);
+    // Verificar el PnL
+    const markPrice = await getMarkPrice(symbol);
+    const pnl = (markPrice - quantity) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
+    const pnlMessage = pnl >= 0 ? `✅ PnL: +${pnl.toFixed(2)} USDT` : `❌ PnL: -${pnl.toFixed(2)} USDT`;
+
+    await sendTelegram(`🔄 Posición cerrada con PnL:
+- ${side} ${symbol}
+- Cantidad: ${quantity}
+- Entrada: $${quantity}
+- Precio Cierre: $${markPrice.toFixed(2)}
+${pnlMessage}`);
   } catch (error) {
     console.error('❌ Error cerrando posición:', error.message);
   }
@@ -194,12 +205,6 @@ app.post('/', async (req, res) => {
 
     console.log(`Cantidad ajustada: ${quantity}`);
 
-    // Mostrar IP pública (opcional)
-    const publicIP = await getPublicIP();
-    if (publicIP) {
-      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
-    }
-
     // Consultar posición actual
     const position = await getPosition(symbol);
 
@@ -207,23 +212,34 @@ app.post('/', async (req, res) => {
       const posSide = parseFloat(position.positionAmt);
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         console.log('Cerrando posición existente...');
-        await closeOpposite(symbol, posSide, price, side);
+        await closeOpposite(symbol, posSide, side, price);
       }
     }
 
     // Asegurar leverage correcto
     await setLeverage(symbol, 3);
 
-    // Crear nueva orden
+    // Obtener el precio del mercado
+    const markPrice = await getMarkPrice(symbol);
+    if (!markPrice) {
+      throw new Error('No se pudo obtener el precio de mercado.');
+    }
+
+    // Verificar si el precio es válido
+    if (markPrice <= 0) {
+      console.error('❌ Precio de mercado no válido.');
+      return;
+    }
+
+    // Enviar nueva orden
     const orderResult = await sendOrder(symbol, side, quantity);
 
     console.log("✅ Nueva orden enviada:", orderResult);
 
     await sendTelegram(`🚀 Nueva operación ejecutada:
-
 - Tipo: ${side}
 - Símbolo: ${symbol}
-- Precio Aproximado: $${price}
+- Precio Aproximado: $${markPrice.toFixed(2)}
 - Cantidad: ${quantity}
 - Order ID: ${orderResult.orderId}`);
 
