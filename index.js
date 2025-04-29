@@ -31,11 +31,21 @@ async function sendTelegram(message) {
     const response = await axios.post(url, {
       chat_id: TELEGRAM_CHAT_ID,
       text: message,
-      parse_mode: 'Markdown',  // Usar Markdown para los colores
     });
     console.log('Respuesta de Telegram:', response.data);
   } catch (error) {
     console.error('❌ Error enviando Telegram:', error.message);
+  }
+}
+
+// 👉 Obtener IP pública (opcional)
+async function getPublicIP() {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    return response.data.ip;
+  } catch (error) {
+    console.error('❌ Error obteniendo IP:', error.message);
+    return null;
   }
 }
 
@@ -98,46 +108,38 @@ async function sendOrder(symbol, side, quantity) {
   }
 }
 
-// 👉 Cerrar posición opuesta si existe
-async function closeOpposite(symbol, currentPositionAmt) {
+// 👉 Obtener el precio de mercado actual
+async function getMarkPrice(symbol) {
   try {
-    const side = currentPositionAmt > 0 ? 'SELL' : 'BUY';
-    const quantity = Math.abs(currentPositionAmt);
-
-    await sendOrder(symbol, side, quantity);
-    await sendTelegram(`🔄 Posición anterior cerrada: ${side} ${symbol} (${quantity})`);
+    const url = `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol}`;
+    const response = await axios.get(url);
+    return parseFloat(response.data.price);
   } catch (error) {
-    console.error('❌ Error cerrando posición:', error.message);
+    console.error('❌ Error obteniendo el precio de mercado:', error.message);
+    return 0;
   }
 }
 
-// 👉 Calcular PnL por operación
-async function calculatePnL(symbol) {
+// 👉 Cerrar posición opuesta si existe
+async function closeOpposite(symbol, currentPositionAmt, entryPrice, side) {
   try {
-    const timestamp = Date.now();
-    const queryString = `timestamp=${timestamp}`;
-    const signature = sign(queryString);
+    const markPrice = await getMarkPrice(symbol); // Precio actual del mercado
+    const pnl = (markPrice - entryPrice) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
 
-    const url = `https://fapi.binance.com/fapi/v2/positionRisk?${queryString}&signature=${signature}`;
-    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+    // Determinar el color del mensaje (rojo para pérdida, verde para ganancia)
+    const pnlColor = pnl >= 0 ? '🟢' : '🔴';
 
-    const response = await axios.get(url, { headers });
-    const positions = response.data;
-
-    const position = positions.find(pos => pos.symbol === symbol);
-    if (!position) return;
-
-    const pnl = parseFloat(position.unrealizedProfit);
-    
-    // Enviar el PnL de la operación
-    const pnlMessage = `📊 PnL de la operación:
-
-    - ${pnl > 0 ? '🟢' : '🔴'} ${pnl > 0 ? 'Ganancia' : 'Pérdida'}: $${pnl.toFixed(2)}
-    - Símbolo: ${symbol}`;
-
-    await sendTelegram(pnlMessage);
+    // Enviar mensaje con PnL
+    await sendTelegram(`
+🔄 Posición anterior cerrada:
+- Tipo: ${side} ${symbol}
+- Cantidad: ${currentPositionAmt}
+- Entrada: $${entryPrice.toFixed(2)}
+- Precio de Cierre: $${markPrice.toFixed(2)}
+- PnL Aproximado: ${pnlColor} $${pnl.toFixed(2)} USDT
+    `);
   } catch (error) {
-    console.error('❌ Error calculando PnL:', error.message);
+    console.error('❌ Error cerrando posición:', error.message);
   }
 }
 
@@ -192,6 +194,12 @@ app.post('/', async (req, res) => {
 
     console.log(`Cantidad ajustada: ${quantity}`);
 
+    // Mostrar IP pública (opcional)
+    const publicIP = await getPublicIP();
+    if (publicIP) {
+      await sendTelegram(`🌐 IP pública del servidor: ${publicIP}`);
+    }
+
     // Consultar posición actual
     const position = await getPosition(symbol);
 
@@ -199,7 +207,7 @@ app.post('/', async (req, res) => {
       const posSide = parseFloat(position.positionAmt);
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         console.log('Cerrando posición existente...');
-        await closeOpposite(symbol, posSide);
+        await closeOpposite(symbol, posSide, price, side);
       }
     }
 
@@ -218,9 +226,6 @@ app.post('/', async (req, res) => {
 - Precio Aproximado: $${price}
 - Cantidad: ${quantity}
 - Order ID: ${orderResult.orderId}`);
-
-    // Calcular y enviar PnL de la operación
-    await calculatePnL(symbol);
 
     res.status(200).send('✅ Señal procesada correctamente.');
   } catch (error) {
