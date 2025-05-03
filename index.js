@@ -1,4 +1,3 @@
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
@@ -106,9 +105,38 @@ async function getMarkPrice(symbol) {
   }
 }
 
+// 👉 Obtener información del símbolo (para precisión)
+async function getSymbolInfo(symbol) {
+  try {
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
+    const signature = sign(queryString);
+
+    const url = `https://fapi.binance.com/fapi/v1/exchangeInfo?${queryString}&signature=${signature}`;
+    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+    const response = await axios.get(url, { headers });
+    const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
+
+    console.log("Información del símbolo:", symbolInfo);
+
+    return symbolInfo;
+  } catch (error) {
+    console.error('❌ Error obteniendo información del símbolo:', error.response?.data || error.message);
+    return null;
+  }
+}
+
 // 👉 Enviar nueva orden a Binance
 async function sendOrder(symbol, side, quantity) {
   try {
+    // Obtener información sobre el símbolo para verificar la precisión
+    const symbolInfo = await getSymbolInfo(symbol);
+
+    // Asegurarse de que la cantidad de la orden no exceda la precisión permitida
+    const precision = symbolInfo?.quantityPrecision || 0;
+    quantity = parseFloat(quantity).toFixed(precision); // Ajustar la cantidad según la precisión del activo
+
     const timestamp = Date.now();
     const queryString = `symbol=${symbol}&side=${side}&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
     const signature = sign(queryString);
