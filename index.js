@@ -1,5 +1,4 @@
-
-const express = require('express'); 
+const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -11,13 +10,12 @@ const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
-// Variables de entorno
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// 🔥 Helper para firmar correctamente
+// Función para firmar las consultas
 function sign(queryString) {
   const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
@@ -25,7 +23,7 @@ function sign(queryString) {
   return signature;
 }
 
-// 👉 Función para enviar mensaje a Telegram
+// Función para enviar mensaje a Telegram
 async function sendTelegram(message) {
   try {
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
@@ -38,18 +36,7 @@ async function sendTelegram(message) {
   }
 }
 
-// 👉 Obtener IP pública (opcional)
-async function getPublicIP() {
-  try {
-    const response = await axios.get('https://api.ipify.org?format=json');
-    return response.data.ip;
-  } catch (error) {
-    console.error('❌ Error obteniendo IP:', error.message);
-    return null;
-  }
-}
-
-// 👉 Consultar posiciones abiertas en Binance
+// Función para obtener la posición actual
 async function getPosition(symbol) {
   try {
     const timestamp = Date.now();
@@ -65,7 +52,7 @@ async function getPosition(symbol) {
   }
 }
 
-// 👉 Cambiar apalancamiento
+// Función para establecer el apalancamiento
 async function setLeverage(symbol, leverage = 3) {
   try {
     const timestamp = Date.now();
@@ -79,7 +66,7 @@ async function setLeverage(symbol, leverage = 3) {
   }
 }
 
-// 👉 Obtener precio de mercado (markPrice)
+// Función para obtener el precio de mercado
 async function getMarkPrice(symbol) {
   try {
     const timestamp = Date.now();
@@ -95,11 +82,12 @@ async function getMarkPrice(symbol) {
   }
 }
 
+// Función para redondear al tamaño adecuado
 function roundToStepSize(value, stepSize) {
   return new Decimal(value).div(stepSize).floor().mul(stepSize).toNumber();
 }
 
-// 👉 Obtener precision del simbolo
+// Función para obtener precisión del símbolo
 async function getSymbolPrecision(symbol) {
   try {
     const url = `https://fapi.binance.com/fapi/v1/exchangeInfo`;
@@ -112,11 +100,11 @@ async function getSymbolPrecision(symbol) {
     };
   } catch (error) {
     console.error("❌ Error obteniendo precisión del símbolo:", error.message);
-    return { stepSize: '0.01' };
+    return { stepSize: '0.01' }; // Valor por defecto conservador
   }
 }
 
-// 👉 Enviar nueva orden a Binance
+// Función para enviar orden
 async function sendOrder(symbol, side, quantity) {
   try {
     const timestamp = Date.now();
@@ -132,7 +120,7 @@ async function sendOrder(symbol, side, quantity) {
   }
 }
 
-// 👉 Cerrar posición opuesta si existe
+// Función para cerrar una posición opuesta
 async function closeOpposite(symbol, currentPositionAmt, side, entryPrice) {
   try {
     const oppositeSide = currentPositionAmt > 0 ? 'SELL' : 'BUY';
@@ -142,7 +130,6 @@ async function closeOpposite(symbol, currentPositionAmt, side, entryPrice) {
 - ${oppositeSide} ${symbol}
 - Cantidad: ${quantityToClose}`);
 
-    // Verificar el PnL
     const markPrice = await getMarkPrice(symbol);
     const pnl = (markPrice - entryPrice) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
     const pnlMessage = pnl >= 0 ? `✅ PnL: +${pnl.toFixed(2)} USDT` : `❌ PnL: -${pnl.toFixed(2)} USDT`;
@@ -156,7 +143,35 @@ ${pnlMessage}`);
   }
 }
 
-// 🚀 Bot principal
+// Función para obtener la IP pública
+async function getPublicIP() {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    return response.data.ip;
+  } catch (error) {
+    console.error('❌ Error obteniendo la IP pública:', error.message);
+    return null;
+  }
+}
+
+// Comprobación de IP antes de realizar solicitudes a Binance
+async function checkIPAndProceed() {
+  const ip = await getPublicIP();
+  console.log(`Tu IP pública es: ${ip}`);
+
+  // Verificar si la IP está en la lista blanca de Binance o es permitida
+  // (Esto depende de la política de tu VPS o de si Binance tiene restricciones geográficas)
+  if (!ip || ip === 'Tu IP bloqueada') {
+    console.log("❌ IP bloqueada o no permitida.");
+    return false;
+  }
+
+  // Si la IP está bien, puedes proceder con las operaciones
+  console.log("✅ IP verificada correctamente. Continuando con la operación...");
+  return true;
+}
+
+// 🚀 Endpoint principal
 app.post('/', async (req, res) => {
   try {
     console.log("Cuerpo recibido:", req.body);
@@ -189,6 +204,13 @@ app.post('/', async (req, res) => {
       if ((posSide > 0 && side === 'SELL') || (posSide < 0 && side === 'BUY')) {
         await closeOpposite(symbol, posSide, side, price);
       }
+    }
+
+    // Verificar la IP antes de proceder
+    const ipVerified = await checkIPAndProceed();
+    if (!ipVerified) {
+      res.status(403).send('❌ IP bloqueada.');
+      return;
     }
 
     await setLeverage(symbol, 3);
