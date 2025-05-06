@@ -9,13 +9,11 @@ const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
-// Variables de entorno
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// 🔥 Helper para firmar correctamente
 function sign(queryString) {
   const signature = crypto.createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
@@ -24,7 +22,6 @@ function sign(queryString) {
   return signature;
 }
 
-// 👉 Función para enviar mensaje a Telegram
 async function sendTelegram(message) {
   try {
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
@@ -38,7 +35,16 @@ async function sendTelegram(message) {
   }
 }
 
-// 👉 Consultar posiciones abiertas en Binance
+async function getPublicIP() {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    return response.data.ip;
+  } catch (error) {
+    console.error('❌ Error obteniendo IP:', error.message);
+    return null;
+  }
+}
+
 async function getPosition(symbol) {
   try {
     const timestamp = Date.now();
@@ -52,7 +58,6 @@ async function getPosition(symbol) {
     const positions = response.data;
 
     console.log('Posiciones abiertas:', positions);
-
     return positions.find(pos => pos.symbol === symbol) || null;
   } catch (error) {
     console.error('❌ Error obteniendo posición:', error.response?.data || error.message);
@@ -60,7 +65,6 @@ async function getPosition(symbol) {
   }
 }
 
-// 👉 Cambiar apalancamiento
 async function setLeverage(symbol, leverage = 3) {
   try {
     const timestamp = Date.now();
@@ -76,11 +80,16 @@ async function setLeverage(symbol, leverage = 3) {
   }
 }
 
-// ✅ Versión corregida 👉 Obtener precio de mercado (markPrice)
 async function getMarkPrice(symbol) {
   try {
-    const url = `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`;
-    const response = await axios.get(url);
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
+    const signature = sign(queryString);
+
+    const url = `https://fapi.binance.com/fapi/v1/premiumIndex?${queryString}&signature=${signature}`;
+    const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
+
+    const response = await axios.get(url, { headers });
     return parseFloat(response.data.markPrice);
   } catch (error) {
     console.error('❌ Error obteniendo el precio de mercado:', error.response?.data || error.message);
@@ -88,11 +97,10 @@ async function getMarkPrice(symbol) {
   }
 }
 
-// 👉 Obtener información del símbolo (para precisión)
 async function getSymbolInfo(symbol) {
   try {
     const timestamp = Date.now();
-    const queryString = `timestamp=${timestamp}`;
+    const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
     const signature = sign(queryString);
 
     const url = `https://fapi.binance.com/fapi/v1/exchangeInfo?${queryString}&signature=${signature}`;
@@ -102,7 +110,6 @@ async function getSymbolInfo(symbol) {
     const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
 
     console.log("Información del símbolo:", symbolInfo);
-
     return symbolInfo;
   } catch (error) {
     console.error('❌ Error obteniendo información del símbolo:', error.response?.data || error.message);
@@ -110,7 +117,6 @@ async function getSymbolInfo(symbol) {
   }
 }
 
-// 👉 Enviar nueva orden a Binance
 async function sendOrder(symbol, side, quantity) {
   try {
     const symbolInfo = await getSymbolInfo(symbol);
@@ -127,7 +133,6 @@ async function sendOrder(symbol, side, quantity) {
     const response = await axios.post(url, null, { headers });
 
     console.log("Respuesta de Binance:", response.data);
-
     return response.data;
   } catch (error) {
     console.error('❌ Error enviando orden:', error.response?.data || error.message);
@@ -135,8 +140,7 @@ async function sendOrder(symbol, side, quantity) {
   }
 }
 
-// 👉 Cerrar posición opuesta si existe
-async function closeOpposite(symbol, currentPositionAmt, side, entryPrice) {
+async function closeOpposite(symbol, currentPositionAmt, side, quantity) {
   try {
     const oppositeSide = currentPositionAmt > 0 ? 'SELL' : 'BUY';
     const quantityToClose = Math.abs(currentPositionAmt);
@@ -145,16 +149,16 @@ async function closeOpposite(symbol, currentPositionAmt, side, entryPrice) {
     await sendTelegram(`🔄 Posición anterior cerrada:
 - ${oppositeSide} ${symbol}
 - Cantidad: ${quantityToClose}
-- Entrada: $${entryPrice}`);
+- Entrada: $${quantity}`);
 
     const markPrice = await getMarkPrice(symbol);
-    const pnl = (markPrice - entryPrice) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
+    const pnl = (markPrice - quantity) * currentPositionAmt * (side === 'SELL' ? 1 : -1);
     const pnlMessage = pnl >= 0 ? `✅ PnL: +${pnl.toFixed(2)} USDT` : `❌ PnL: -${pnl.toFixed(2)} USDT`;
 
     await sendTelegram(`🔄 Posición cerrada con PnL:
 - ${side} ${symbol}
-- Cantidad: ${quantityToClose}
-- Entrada: $${entryPrice}
+- Cantidad: ${quantity}
+- Entrada: $${quantity}
 - Precio Cierre: $${markPrice.toFixed(2)}
 ${pnlMessage}`);
   } catch (error) {
@@ -166,10 +170,9 @@ ${pnlMessage}`);
 app.post('/', async (req, res) => {
   try {
     console.log("Cuerpo recibido:", req.body);
-
     const { message } = req.body;
-    if (!message) throw new Error('El mensaje recibido es inválido o está vacío.');
 
+    if (!message) throw new Error('El mensaje recibido es inválido o está vacío.');
     console.log("Mensaje recibido:", message);
 
     let side, symbol, price;
@@ -185,7 +188,8 @@ app.post('/', async (req, res) => {
 
     console.log(`Extracción - Símbolo: ${symbol}, Precio: ${price}`);
 
-    symbol = symbol.replace('PERP', '');
+    // ✅ LIMPIEZA Y NORMALIZACIÓN DEL SÍMBOLO
+    symbol = symbol.replace(/PERP|\.p/gi, '').toUpperCase();
     price = parseFloat(price);
 
     console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
@@ -194,7 +198,12 @@ app.post('/', async (req, res) => {
     let quantity = orderUSDT / price;
     console.log(`Cantidad calculada: ${quantity}`);
 
-    quantity = symbol.endsWith('USDT') ? quantity.toFixed(3) : quantity.toFixed(0);
+    if (symbol.endsWith('USDT')) {
+      quantity = quantity.toFixed(3);
+    } else {
+      quantity = quantity.toFixed(0);
+    }
+
     console.log(`Cantidad ajustada: ${quantity}`);
 
     const position = await getPosition(symbol);
@@ -207,11 +216,11 @@ app.post('/', async (req, res) => {
     }
 
     await setLeverage(symbol, 3);
-
     const markPrice = await getMarkPrice(symbol);
     if (!markPrice || markPrice <= 0) throw new Error('No se pudo obtener el precio de mercado.');
 
     const orderResult = await sendOrder(symbol, side, quantity);
+
     console.log("✅ Nueva orden enviada:", orderResult);
 
     await sendTelegram(`🚀 Nueva operación ejecutada:
