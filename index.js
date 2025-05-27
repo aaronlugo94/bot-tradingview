@@ -188,9 +188,11 @@ app.post('/', async (req, res) => {
 
     console.log(`Extracción - Símbolo: ${symbol}, Precio: ${price}`);
 
-    // ✅ LIMPIEZA Y NORMALIZACIÓN DEL SÍMBOLO
-    symbol = symbol.replace(/PERP|\.p/gi, '').toUpperCase();
-    price = parseFloat(price);
+   // ✅ LIMPIEZA Y NORMALIZACIÓN DEL SÍMBOLO
+symbol = symbol.replace(/[^a-zA-Z]/g, '').toUpperCase();
+if (symbol.endsWith('USD')) symbol = symbol.replace(/USD$/, 'USDT');
+price = parseFloat(price);
+
 
     console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
 
