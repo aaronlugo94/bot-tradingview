@@ -188,21 +188,11 @@ app.post('/', async (req, res) => {
 
     console.log(`Extracción - Símbolo: ${symbol}, Precio: ${price}`);
 
-// Normaliza el símbolo (ej: ethusd.p → ETHUSDT)
-symbol = symbol.toUpperCase().replace(/[^A-Z]/g, '');
-
-if (symbol.endsWith('USD') && !symbol.endsWith('USDT')) {
-  symbol = symbol.replace(/USD$/, 'USDT');
-} else if (symbol.endsWith('P')) {
-  symbol = symbol.replace(/P$/, 'USDT');
-} else if (!symbol.endsWith('USDT')) {
-  symbol = symbol + 'USDT';
-}
-
-console.log(`⚠️ Símbolo final que se usará con Binance: ${symbol}`);
-
-
+    // ✅ LIMPIEZA Y NORMALIZACIÓN DEL SÍMBOLO
+    symbol = symbol.replace(/PERP|\.p/gi, '').toUpperCase();
     price = parseFloat(price);
+
+    console.log(`Símbolo procesado: ${symbol}, Precio procesado: ${price}`);
 
     const orderUSDT = 200;
     let quantity = orderUSDT / price;
