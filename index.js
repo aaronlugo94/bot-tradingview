@@ -63,7 +63,7 @@ async function getPosition(symbol) {
     }
 }
 
-async function setLeverage(symbol, leverage = 3) {
+async function setLeverage(symbol, leverage = 2) {
     try {
         const timestamp = Date.now();
         const queryString = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
