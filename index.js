@@ -33,6 +33,17 @@ async function sendTelegram(message) {
     }
 }
 
+// FUNCIÓN RESTAURADA
+async function getPublicIP() {
+    try {
+        const response = await axios.get('https://api.ipify.org?format=json');
+        return response.data.ip;
+    } catch (error) {
+        console.error('❌ Error obteniendo IP:', error.message);
+        return null;
+    }
+}
+
 async function getPosition(symbol) {
     try {
         const timestamp = Date.now();
@@ -148,15 +159,12 @@ app.post('/', async (req, res) => {
 
         const position = await getPosition(symbol);
 
-        // Lógica de Cierre: Si hay un LONG y llega un SELL, solo cierra y termina.
         if (position && parseFloat(position.positionAmt) > 0 && side === 'SELL') {
             console.log('Señal de SELL recibida con LONG abierto. Cerrando posición...');
             await closeOpposite(symbol, position.positionAmt);
             return res.status(200).send('✅ Posición LONG cerrada correctamente.');
         }
 
-        // Lógica de Apertura: Si no hay posición, o la señal es en la misma dirección, abre una nueva.
-        // (Nota: esta lógica asume que no quieres añadir a una posición existente)
         if (position) {
             console.log('Ya hay una posición abierta en la misma dirección. No se hace nada.');
             return res.status(200).send('Ignorado: Ya existe una posición.');
