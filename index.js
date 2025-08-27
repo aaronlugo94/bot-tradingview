@@ -33,7 +33,6 @@ async function sendTelegram(message) {
     }
 }
 
-// FUNCIÓN RESTAURADA
 async function getPublicIP() {
     try {
         const response = await axios.get('https://api.ipify.org?format=json');
@@ -63,7 +62,7 @@ async function getPosition(symbol) {
     }
 }
 
-async function setLeverage(symbol, leverage = 2) {
+async function setLeverage(symbol, leverage) {
     try {
         const timestamp = Date.now();
         const queryString = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
@@ -122,13 +121,34 @@ async function sendOrder(symbol, side, quantity) {
     }
 }
 
-async function closeOpposite(symbol, currentPositionAmt) {
+// =============================================================================
+// === FUNCIÓN DE CIERRE MODIFICADA ============================================
+// =============================================================================
+async function closeOpposite(symbol, position) {
     try {
-        const oppositeSide = parseFloat(currentPositionAmt) > 0 ? 'SELL' : 'BUY';
-        const quantityToClose = Math.abs(parseFloat(currentPositionAmt));
+        const oppositeSide = parseFloat(position.positionAmt) > 0 ? 'SELL' : 'BUY';
+        const quantityToClose = Math.abs(parseFloat(position.positionAmt));
+        const entryPrice = parseFloat(position.entryPrice);
 
+        // Obtenemos el precio de cierre para calcular el PnL
+        const markPrice = await getMarkPrice(symbol);
+        
+        // Enviamos la orden de cierre
         await sendOrder(symbol, oppositeSide, quantityToClose);
-        await sendTelegram(`✅ Posición en ${symbol} cerrada.`);
+
+        if (!markPrice) {
+            await sendTelegram(`✅ Posición en ${symbol} cerrada (No se pudo calcular PnL).`);
+            return;
+        }
+
+        // Calculamos el PnL
+        const pnl = (markPrice - entryPrice) * parseFloat(position.positionAmt);
+        const pnlMessage = pnl >= 0 
+            ? `✅ PnL: +$${pnl.toFixed(2)}` 
+            : `❌ PnL: -$${Math.abs(pnl).toFixed(2)}`;
+
+        await sendTelegram(`✅ Posición en ${symbol} cerrada.\n${pnlMessage}`);
+
     } catch (error) {
         console.error('❌ Error cerrando posición:', error.message);
         await sendTelegram(`❌ Error al intentar cerrar la posición en ${symbol}.`);
@@ -158,19 +178,23 @@ app.post('/', async (req, res) => {
         price = parseFloat(price);
 
         const position = await getPosition(symbol);
-
+        
+        // Lógica de Cierre: Si hay un LONG y llega un SELL, solo cierra y termina.
         if (position && parseFloat(position.positionAmt) > 0 && side === 'SELL') {
             console.log('Señal de SELL recibida con LONG abierto. Cerrando posición...');
-            await closeOpposite(symbol, position.positionAmt);
+            await closeOpposite(symbol, position); // <-- Pasamos el objeto 'position' completo
             return res.status(200).send('✅ Posición LONG cerrada correctamente.');
         }
 
+        // Lógica para evitar abrir un nuevo trade si ya existe uno
         if (position) {
-            console.log('Ya hay una posición abierta en la misma dirección. No se hace nada.');
+            console.log('Ya hay una posición abierta. No se hace nada.');
             return res.status(200).send('Ignorado: Ya existe una posición.');
         }
 
-        await setLeverage(symbol, 3);
+        const leverage = 3; // Definimos el apalancamiento a usar
+        await setLeverage(symbol, leverage);
+        
         const markPrice = await getMarkPrice(symbol);
         if (!markPrice || markPrice <= 0) throw new Error('No se pudo obtener el precio de mercado.');
         
@@ -179,9 +203,13 @@ app.post('/', async (req, res) => {
 
         const orderResult = await sendOrder(symbol, side, quantity);
 
+        // =============================================================================
+        // === MENSAJE DE APERTURA MODIFICADO ==========================================
+        // =============================================================================
         await sendTelegram(`🚀 Nueva operación ejecutada:
 - Tipo: ${side}
 - Símbolo: ${symbol}
+- Apalancamiento: ${leverage}x
 - Precio Aproximado: $${markPrice.toFixed(2)}
 - Cantidad: ${quantity.toFixed(3)}
 - Order ID: ${orderResult.orderId}`);
