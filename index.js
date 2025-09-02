@@ -198,7 +198,7 @@ app.post('/', async (req, res) => {
         const markPrice = await getMarkPrice(symbol);
         if (!markPrice || markPrice <= 0) throw new Error('No se pudo obtener el precio de mercado.');
         
-        const orderUSDT = 200;
+        const orderUSDT = 300;
         const quantity = orderUSDT / markPrice;
 
         const orderResult = await sendOrder(symbol, side, quantity);
