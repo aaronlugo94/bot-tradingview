@@ -182,7 +182,7 @@ app.post('/', async (req, res) => {
         // Lógica de Cierre: Si hay un LONG y llega un SELL, solo cierra y termina.
         if (position && parseFloat(position.positionAmt) > 0 && side === 'SELL') {
             console.log('Señal de SELL recibida con LONG abierto. Cerrando posición...');
-            await closeOpposite(symbol, position); // <-- Pasamos el objeto 'position' completo
+            await closeOpposite(symbol, position);
             return res.status(200).send('✅ Posición LONG cerrada correctamente.');
         }
 
@@ -192,21 +192,22 @@ app.post('/', async (req, res) => {
             return res.status(200).send('Ignorado: Ya existe una posición.');
         }
 
-        const leverage = 3; // Definimos el apalancamiento a usar
-        await setLeverage(symbol, leverage);
-        
-        const markPrice = await getMarkPrice(symbol);
-        if (!markPrice || markPrice <= 0) throw new Error('No se pudo obtener el precio de mercado.');
-        
-        const orderUSDT = 300;
-        const quantity = orderUSDT / markPrice;
+        // <-- INICIO DE LA MODIFICACIÓN
+        // Solo procederemos a abrir una nueva posición si la señal es de compra (BUY).
+        if (side === 'BUY') {
+            const leverage = 3; // Definimos el apalancamiento a usar
+            await setLeverage(symbol, leverage);
+            
+            const markPrice = await getMarkPrice(symbol);
+            if (!markPrice || markPrice <= 0) throw new Error('No se pudo obtener el precio de mercado.');
+            
+            const orderUSDT = 300;
+            const quantity = orderUSDT / markPrice;
 
-        const orderResult = await sendOrder(symbol, side, quantity);
+            const orderResult = await sendOrder(symbol, side, quantity);
 
-        // =============================================================================
-        // === MENSAJE DE APERTURA MODIFICADO ==========================================
-        // =============================================================================
-        await sendTelegram(`🚀 Nueva operación ejecutada:
+            // Mensaje de apertura modificado
+            await sendTelegram(`🚀 Nueva operación ejecutada:
 - Tipo: ${side}
 - Símbolo: ${symbol}
 - Apalancamiento: ${leverage}x
@@ -214,7 +215,14 @@ app.post('/', async (req, res) => {
 - Cantidad: ${quantity.toFixed(3)}
 - Order ID: ${orderResult.orderId}`);
 
-        res.status(200).send('✅ Señal de apertura procesada correctamente.');
+            res.status(200).send('✅ Señal de apertura procesada correctamente.');
+        } else {
+            // Si la señal es SELL y no hay posición abierta, la ignoramos.
+            console.log('Señal de SELL ignorada, no hay posición abierta para cerrar.');
+            res.status(200).send('Ignorado: Señal de SELL sin posición LONG abierta.');
+        }
+        // <-- FIN DE LA MODIFICACIÓN
+
     } catch (error) {
         console.error("❌ Error:", error.message);
         await sendTelegram(`❌ Error procesando señal: ${JSON.stringify(error.response?.data || error.message)}`);
